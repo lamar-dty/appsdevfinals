@@ -188,7 +188,6 @@ class _SplashScreenState extends State<SplashScreen>
 }
 
 // ── White arch background ──────────────────────────────────────
-// ignore: unused_element
 class _ArcPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -198,62 +197,6 @@ class _ArcPainter extends CustomPainter {
     path.quadraticBezierTo(size.width / 2, -size.height * 0.05, size.width, size.height * 0.25);
     path.lineTo(size.width, size.height);
     path.lineTo(0, size.height);
-    path.close();
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter _) => false;
-}
-
-// ── Big navy rabbit body peeking at bottom ─────────────────────
-class _BigRabbitPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final navyPaint = Paint()..color = const Color(0xFF243D6D);
-    final whitePaint = Paint()..color = Colors.white;
-    final tealPaint = Paint()..color = const Color(0xFF90D0CB);
-
-    final cx = size.width / 2;
-
-    // ── Left ear ─────────────────────────────────────────────
-    _drawEar(canvas, navyPaint, cx - size.width * 0.18, size.height * 0.05, size);
-    // ── Right ear ────────────────────────────────────────────
-    _drawEar(canvas, navyPaint, cx + size.width * 0.18, size.height * 0.05, size);
-
-    // ── Body / head circle ───────────────────────────────────
-    final bodyRadius = size.width * 0.40;
-    canvas.drawCircle(
-      Offset(cx, size.height * 0.72),
-      bodyRadius,
-      navyPaint,
-    );
-
-    // ── Left eye white ───────────────────────────────────────
-    canvas.drawCircle(Offset(cx - size.width * 0.13, size.height * 0.58), size.width * 0.065, whitePaint);
-    canvas.drawCircle(Offset(cx - size.width * 0.11, size.height * 0.58), size.width * 0.038,
-        Paint()..color = const Color(0xFF1A1A2E));
-
-    // ── Right eye white ──────────────────────────────────────
-    canvas.drawCircle(Offset(cx + size.width * 0.13, size.height * 0.58), size.width * 0.065, whitePaint);
-    canvas.drawCircle(Offset(cx + size.width * 0.11, size.height * 0.58), size.width * 0.038,
-        Paint()..color = const Color(0xFF1A1A2E));
-
-    // ── Eye shine ────────────────────────────────────────────
-    canvas.drawCircle(Offset(cx - size.width * 0.09, size.height * 0.565), size.width * 0.012, whitePaint);
-    canvas.drawCircle(Offset(cx + size.width * 0.15, size.height * 0.565), size.width * 0.012, whitePaint);
-
-    // ── Nose (teal dot) ──────────────────────────────────────
-    canvas.drawCircle(Offset(cx, size.height * 0.645), size.width * 0.022, tealPaint);
-  }
-
-  void _drawEar(Canvas canvas, Paint paint, double cx, double tipY, Size size) {
-    final path = Path();
-    final baseY = size.height * 0.55;
-    final halfW = size.width * 0.075;
-    path.moveTo(cx - halfW, baseY);
-    path.quadraticBezierTo(cx - halfW * 1.3, tipY, cx, tipY - size.height * 0.02);
-    path.quadraticBezierTo(cx + halfW * 1.3, tipY, cx + halfW, baseY);
     path.close();
     canvas.drawPath(path, paint);
   }
