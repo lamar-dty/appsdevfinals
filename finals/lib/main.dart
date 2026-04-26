@@ -95,7 +95,9 @@ class _MainScaffoldState extends State<MainScaffold> {
           onTap: (i) => setState(() => _selectedIndex = i),
         ),
       ),
-      floatingActionButton: const DashboardFAB(),
+      floatingActionButton: DashboardFAB(
+        onNavigateToCalendar: () => setState(() => _selectedIndex = 1),
+      ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
     );
   }

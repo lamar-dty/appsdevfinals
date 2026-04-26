@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../constants/colors.dart';
+import '../models/task.dart';
 
 class NotificationItem extends StatelessWidget {
   final IconData icon;
@@ -9,6 +10,8 @@ class NotificationItem extends StatelessWidget {
   final String title;
   final String detail;
   final bool showDashedLine;
+  final TaskPriority? priority;
+  final bool isRead;
 
   const NotificationItem({
     super.key,
@@ -19,32 +22,73 @@ class NotificationItem extends StatelessWidget {
     required this.title,
     required this.detail,
     this.showDashedLine = true,
+    this.priority,
+    this.isRead = true,
   });
 
   @override
   Widget build(BuildContext context) {
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Icon + dashed line column
-          SizedBox(
+    return Container(
+      decoration: isRead
+          ? null
+          : BoxDecoration(
+              color: iconColor.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(12),
+            ),
+      padding: isRead ? EdgeInsets.zero : const EdgeInsets.fromLTRB(8, 6, 8, 0),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Unread accent bar
+            if (!isRead)
+              Container(
+                width: 3,
+                margin: const EdgeInsets.only(right: 8, top: 10, bottom: 24),
+                decoration: BoxDecoration(
+                  color: iconColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            // Icon + dashed line column
+            SizedBox(
             width: 52,
             child: Column(
               children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: iconBgColor,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(icon, color: iconColor, size: 22),
+                // Icon with priority dot badge
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: iconBgColor,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(icon, color: iconColor, size: 22),
+                    ),
+                    if (priority != null)
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: Container(
+                          width: 13,
+                          height: 13,
+                          decoration: BoxDecoration(
+                            color: priority!.color,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: kWhite, width: 2),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 if (showDashedLine)
                   Expanded(
                     child: CustomPaint(
-                      painter: _DashedLinePainter(color: iconColor.withOpacity(0.5)),
+                      painter: _DashedLinePainter(
+                          color: iconColor.withOpacity(0.5)),
                     ),
                   ),
               ],
@@ -59,9 +103,34 @@ class NotificationItem extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const SizedBox(height: 4),
-                  Text(subtitle,
-                      style: const TextStyle(
-                          color: Color(0xFF6B7A99), fontSize: 13)),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(subtitle,
+                            style: const TextStyle(
+                                color: Color(0xFF6B7A99), fontSize: 13)),
+                      ),
+                      if (priority != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: priority!.color.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                                color: priority!.color.withOpacity(0.35)),
+                          ),
+                          child: Text(
+                            priority!.label,
+                            style: TextStyle(
+                              color: priority!.color,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                   const SizedBox(height: 2),
                   Text(title,
                       style: const TextStyle(
@@ -77,6 +146,7 @@ class NotificationItem extends StatelessWidget {
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -99,7 +169,8 @@ class _DashedLinePainter extends CustomPainter {
     final x = size.width / 2;
 
     while (startY < size.height) {
-      canvas.drawLine(Offset(x, startY), Offset(x, startY + dashHeight), paint);
+      canvas.drawLine(
+          Offset(x, startY), Offset(x, startY + dashHeight), paint);
       startY += dashHeight + dashSpace;
     }
   }

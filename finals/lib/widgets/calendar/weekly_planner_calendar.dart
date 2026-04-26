@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../constants/colors.dart';
+import '../../models/task.dart';
+import '../../store/task_store.dart';
 
 // ─────────────────────────────────────────────────────────────
 // Models
@@ -8,18 +10,14 @@ class PlanCategory {
   final String id;
   final String name;
   final Color color;
-  final String? parentId;
   bool visible;
 
   PlanCategory({
     required this.id,
     required this.name,
     required this.color,
-    this.parentId,
     this.visible = true,
   });
-
-  bool get isParent => parentId == null;
 }
 
 class PlanEvent {
@@ -29,6 +27,10 @@ class PlanEvent {
   final int weekday;      // 1=Mon … 7=Sun
   final double startHour; // e.g. 9.0 = 9:00 AM
   final double endHour;   // e.g. 10.5 = 10:30 AM
+  final String taskId;    // original task id — for deduplication
+  final String? notes;
+  final TaskPriority priority;
+  final bool hasTime;
 
   const PlanEvent({
     required this.title,
@@ -37,12 +39,20 @@ class PlanEvent {
     required this.weekday,
     required this.startHour,
     required this.endHour,
+    required this.taskId,
+    required this.priority,
+    required this.hasTime,
+    this.notes,
   });
 
   double get durationHours => endHour - startHour;
 }
 
-final List<PlanEvent> _kSampleEvents = [];
+// Category ID constants — map 1:1 to TaskCategory enum
+const _kCatAssignment   = 'assignment';
+const _kCatProject      = 'project';
+const _kCatAssessment   = 'assessment';
+const _kCatPersonalTask = 'personal_task';
 
 // ─────────────────────────────────────────────────────────────
 // WeeklyPlannerCalendar
@@ -73,14 +83,10 @@ class _WeeklyPlannerCalendarState extends State<WeeklyPlannerCalendar>
 
 
   final List<PlanCategory> _categories = [
-    PlanCategory(id: 'academic',      name: 'Academic Task', color: const Color(0xFF4A90D9)),
-    PlanCategory(id: 'assignment',    name: 'Assignment',    color: const Color(0xFF9B88E8), parentId: 'academic'),
-    PlanCategory(id: 'project',       name: 'Project',       color: const Color(0xFFE8D870), parentId: 'academic'),
-    PlanCategory(id: 'assessment',    name: 'Assessment',    color: const Color(0xFF90D0CB), parentId: 'academic'),
-    PlanCategory(id: 'events',        name: 'Events',        color: const Color(0xFFE8A870)),
-    PlanCategory(id: 'acad_event',    name: 'Academic',      color: const Color(0xFF4A90D9), parentId: 'events'),
-    PlanCategory(id: 'personal_evt',  name: 'Personal',      color: const Color(0xFFE8A870), parentId: 'events'),
-    PlanCategory(id: 'personal_task', name: 'Personal Task', color: const Color(0xFF9B88E8)),
+    PlanCategory(id: _kCatAssignment,   name: 'Assignment',    color: const Color(0xFF9B88E8)),
+    PlanCategory(id: _kCatProject,      name: 'Project',       color: const Color(0xFFE8D870)),
+    PlanCategory(id: _kCatAssessment,   name: 'Assessment',    color: const Color(0xFF90D0CB)),
+    PlanCategory(id: _kCatPersonalTask, name: 'Personal Task', color: const Color(0xFFE8A870)),
   ];
 
   @override
@@ -93,38 +99,105 @@ class _WeeklyPlannerCalendarState extends State<WeeklyPlannerCalendar>
       vsync: this,
       duration: const Duration(milliseconds: 300),
     )..forward();
+    TaskStore.instance.addListener(_onStoreChanged);
   }
 
   @override
   void dispose() {
+    TaskStore.instance.removeListener(_onStoreChanged);
     _fadeCtrl.dispose();
     super.dispose();
   }
 
+  void _onStoreChanged() => setState(() {});
+
   // ── Category helpers ──────────────────────────────────────
+  String _categoryId(TaskCategory cat) {
+    switch (cat) {
+      case TaskCategory.assignment:   return _kCatAssignment;
+      case TaskCategory.project:      return _kCatProject;
+      case TaskCategory.assessment:   return _kCatAssessment;
+      case TaskCategory.personalTask: return _kCatPersonalTask;
+    }
+  }
+
   bool _isCategoryVisible(String catId) {
     final cat = _categories.firstWhere((c) => c.id == catId, orElse: () => _categories.first);
-    if (!cat.visible) return false;
-    if (cat.parentId != null) {
-      final parent = _categories.firstWhere((c) => c.id == cat.parentId!, orElse: () => cat);
-      return parent.visible;
-    }
-    return true;
+    return cat.visible;
   }
 
   void _toggleCategory(PlanCategory cat) {
-    setState(() {
-      cat.visible = !cat.visible;
-      if (cat.isParent) {
-        for (final child in _categories.where((c) => c.parentId == cat.id)) {
-          child.visible = cat.visible;
-        }
-      }
-    });
+    setState(() => cat.visible = !cat.visible);
   }
 
-  List<PlanEvent> get _visibleEvents =>
-      _kSampleEvents.where((e) => _isCategoryVisible(e.categoryId)).toList();
+  /// Convert tasks from TaskStore into PlanEvents for the selected week.
+  List<PlanEvent> get _visibleEvents {
+    final weekDays = _weekDays();
+    final weekStart = DateTime(weekDays.first.year, weekDays.first.month, weekDays.first.day);
+    final weekEnd   = DateTime(weekDays.last.year,  weekDays.last.month,  weekDays.last.day);
+
+    final events = <PlanEvent>[];
+    for (final task in TaskStore.instance.tasks) {
+      final catId = _categoryId(task.category);
+      if (!_isCategoryVisible(catId)) continue;
+
+      final taskStart = DateTime(task.dueDate.year, task.dueDate.month, task.dueDate.day);
+      final taskEnd   = task.endDate != null
+          ? DateTime(task.endDate!.year, task.endDate!.month, task.endDate!.day)
+          : taskStart;
+
+      // Skip tasks entirely outside this week
+      if (taskEnd.isBefore(weekStart) || taskStart.isAfter(weekEnd)) continue;
+
+      // Clamp the task range to the visible week
+      final clampedStart = taskStart.isBefore(weekStart) ? weekStart : taskStart;
+      final clampedEnd   = taskEnd.isAfter(weekEnd) ? weekEnd : taskEnd;
+
+      // Generate one event per day in the clamped range
+      DateTime cursor = clampedStart;
+      while (!cursor.isAfter(clampedEnd)) {
+        double startHour;
+        double endHour;
+
+        if (task.dueTime != null) {
+          startHour = task.dueTime!.hour + task.dueTime!.minute / 60.0;
+          if (task.endTime != null) {
+            endHour = task.endTime!.hour + task.endTime!.minute / 60.0;
+            if (endHour <= startHour) endHour = startHour + 1.0;
+          } else {
+            endHour = startHour + 1.0;
+          }
+        } else {
+          // No time — place at 8am as a 30-min placeholder
+          startHour = 8.0;
+          endHour   = 8.5;
+        }
+
+        // Clamp to grid bounds
+        startHour = startHour.clamp(widget.startHour.toDouble(), widget.endHour.toDouble());
+        endHour   = endHour.clamp(startHour, widget.endHour.toDouble());
+
+        events.add(PlanEvent(
+          title:      task.name,
+          categoryId: catId,
+          color:      task.category.color,
+          weekday:    cursor.weekday,
+          startHour:  startHour,
+          endHour:    endHour,
+          taskId:     task.id,
+          notes:      task.notes,
+          priority:   task.priority,
+          hasTime:    task.dueTime != null,
+        ));
+
+        cursor = cursor.add(const Duration(days: 1));
+      }
+    }
+    return events;
+  }
+
+  /// Unique task count — multi-day tasks count as one regardless of how many day-columns they fill.
+  int get _visibleTaskCount => _visibleEvents.map((e) => e.taskId).toSet().length;
 
   // ── Date helpers ──────────────────────────────────────────
   List<DateTime> _daysInMonth(DateTime month) {
@@ -333,6 +406,7 @@ class _WeeklyPlannerCalendarState extends State<WeeklyPlannerCalendar>
                   now: now,
                   monthLabel: '${_fullMonth(_focusedMonth.month)} ${_focusedMonth.year}',
                   visibleEvents: _visibleEvents,
+                  allTasks: TaskStore.instance.tasks,
                   onPrev: () => setState(() =>
                     _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1)),
                   onNext: () => setState(() =>
@@ -375,7 +449,7 @@ class _WeeklyPlannerCalendarState extends State<WeeklyPlannerCalendar>
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 200),
                 child: Container(
-                  key: ValueKey(_visibleEvents.length),
+                  key: ValueKey(_visibleTaskCount),
                   padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
                   decoration: BoxDecoration(
                     color: kTeal.withOpacity(0.15),
@@ -383,7 +457,7 @@ class _WeeklyPlannerCalendarState extends State<WeeklyPlannerCalendar>
                     border: Border.all(color: kTeal.withOpacity(0.3)),
                   ),
                   child: Text(
-                    '${_visibleEvents.length} events',
+                    '$_visibleTaskCount task${_visibleTaskCount == 1 ? '' : 's'}',
                     style: const TextStyle(
                         color: kTeal, fontSize: 10, fontWeight: FontWeight.w600),
                   ),
@@ -494,6 +568,7 @@ class _MiniCalendar extends StatelessWidget {
   final DateTime focusedMonth, selectedDay, now;
   final String monthLabel;
   final List<PlanEvent> visibleEvents;
+  final List<Task> allTasks;
   final VoidCallback onPrev, onNext;
   final void Function(DateTime) onDayTap;
 
@@ -504,6 +579,7 @@ class _MiniCalendar extends StatelessWidget {
     required this.now,
     required this.monthLabel,
     required this.visibleEvents,
+    required this.allTasks,
     required this.onPrev,
     required this.onNext,
     required this.onDayTap,
@@ -561,9 +637,12 @@ class _MiniCalendar extends StatelessWidget {
                 day.month == selectedDay.month && day.day == selectedDay.day;
 
             final dots = isCur
-                ? visibleEvents
-                    .where((e) => e.weekday == day.weekday)
-                    .map((e) => e.color)
+                ? allTasks
+                    .where((t) =>
+                        t.dueDate.year  == day.year &&
+                        t.dueDate.month == day.month &&
+                        t.dueDate.day   == day.day)
+                    .map((t) => t.category.color)
                     .take(3)
                     .toList()
                 : <Color>[];
@@ -688,34 +767,25 @@ class _LegendPanel extends StatelessWidget {
           const SizedBox(height: 8),
 
           ...categories.map((cat) {
-            final isChild  = cat.parentId != null;
-            final parentOff = isChild &&
-                !(categories.firstWhere((c) => c.id == cat.parentId!).visible);
-            final effectiveOn = cat.visible && !parentOff;
-
             return GestureDetector(
               onTap: () => onToggle(cat),
               behavior: HitTestBehavior.opaque,
               child: Padding(
-                padding: EdgeInsets.only(
-                  left: isChild ? 11.0 : 0.0,
-                  top:  cat.isParent ? 6.0 : 3.0,
-                  bottom: 1.0,
-                ),
+                padding: const EdgeInsets.only(top: 6.0, bottom: 1.0),
                 child: Row(
                   children: [
                     AnimatedContainer(
                       duration: const Duration(milliseconds: 160),
                       width: 13, height: 13,
                       decoration: BoxDecoration(
-                        color: effectiveOn ? cat.color : Colors.transparent,
+                        color: cat.visible ? cat.color : Colors.transparent,
                         border: Border.all(
-                          color: effectiveOn ? cat.color : cat.color.withOpacity(0.3),
+                          color: cat.visible ? cat.color : cat.color.withOpacity(0.3),
                           width: 1.5,
                         ),
                         borderRadius: BorderRadius.circular(4),
                       ),
-                      child: effectiveOn
+                      child: cat.visible
                           ? const Icon(Icons.check_rounded, size: 9, color: Colors.white)
                           : null,
                     ),
@@ -724,12 +794,11 @@ class _LegendPanel extends StatelessWidget {
                       child: AnimatedDefaultTextStyle(
                         duration: const Duration(milliseconds: 160),
                         style: TextStyle(
-                          color: effectiveOn
+                          color: cat.visible
                               ? kNavyDark
                               : kNavyDark.withOpacity(0.25),
-                          fontSize: cat.isParent ? 9.5 : 8.5,
-                          fontWeight:
-                              cat.isParent ? FontWeight.w700 : FontWeight.w500,
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w700,
                         ),
                         child: Text(cat.name,
                             overflow: TextOverflow.ellipsis, maxLines: 1),
@@ -882,7 +951,7 @@ class _WeeklyGridState extends State<_WeeklyGrid> {
           // Viewport = screen height minus appbar, top UI, bottom nav,
           // and whatever the peeking sheet currently covers.
           SizedBox(
-            height: (_rowH * 8 - widget.peekHeight).clamp(_rowH * 3, _rowH * 8),
+            height: (MediaQuery.of(context).size.height * 0.52 - widget.peekHeight).clamp(_rowH * 4, _rowH * 14),
             child: SingleChildScrollView(
               controller: _scrollCtrl,
               physics: const ClampingScrollPhysics(),
@@ -1027,25 +1096,113 @@ class _EventBlock extends StatelessWidget {
   final PlanEvent event;
   const _EventBlock({required this.event});
 
+  String _priorityLabel(TaskPriority p) {
+    switch (p) {
+      case TaskPriority.high:   return '!!!';
+      case TaskPriority.medium: return '!!';
+      case TaskPriority.low:    return '!';
+    }
+  }
+
+  Color _priorityColor(TaskPriority p) {
+    switch (p) {
+      case TaskPriority.high:   return const Color(0xFFE87070);
+      case TaskPriority.medium: return const Color(0xFFE8D870);
+      case TaskPriority.low:    return const Color(0xFF3BBFA3);
+    }
+  }
+
+  String _formatHour(double h) {
+    final hour   = h.floor();
+    final minute = ((h - hour) * 60).round();
+    final period = hour < 12 ? 'AM' : 'PM';
+    final h12    = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
+    return minute == 0 ? '$h12$period' : '$h12:${minute.toString().padLeft(2, '0')}$period';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final priorityColor = _priorityColor(event.priority);
+    final tall = event.durationHours >= 1.0;
+    final veryTall = event.durationHours >= 1.5;
+
     return Container(
       decoration: BoxDecoration(
-        color: event.color.withOpacity(0.18),
-        borderRadius: BorderRadius.circular(6),
-        border: Border(left: BorderSide(color: event.color, width: 3)),
+        color: event.color.withOpacity(0.16),
+        borderRadius: BorderRadius.circular(7),
+        border: Border(left: BorderSide(color: event.color, width: 3.5)),
+        boxShadow: [
+          BoxShadow(
+            color: event.color.withOpacity(0.15),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
-      padding: const EdgeInsets.fromLTRB(5, 3, 3, 3),
-      child: Text(
-        event.title,
-        style: TextStyle(
-          color: event.color,
-          fontSize: 8.5,
-          fontWeight: FontWeight.w700,
-          height: 1.3,
-        ),
-        maxLines: 3,
-        overflow: TextOverflow.ellipsis,
+      padding: const EdgeInsets.fromLTRB(5, 3, 4, 3),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title row with priority dot
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  event.title,
+                  style: TextStyle(
+                    color: event.color,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    height: 1.25,
+                  ),
+                  maxLines: tall ? 2 : 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 2),
+              Container(
+                width: 7, height: 7,
+                margin: const EdgeInsets.only(top: 2),
+                decoration: BoxDecoration(
+                  color: priorityColor,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ),
+
+          // Time label
+          if (tall && event.hasTime) ...[
+            const SizedBox(height: 2),
+            Text(
+              '${_formatHour(event.startHour)} – ${_formatHour(event.endHour)}',
+              style: TextStyle(
+                color: event.color.withOpacity(0.7),
+                fontSize: 7.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+
+          // Notes
+          if (veryTall && event.notes != null && event.notes!.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Expanded(
+              child: Text(
+                event.notes!,
+                style: TextStyle(
+                  color: event.color.withOpacity(0.55),
+                  fontSize: 7.5,
+                  height: 1.3,
+                  fontStyle: FontStyle.italic,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 3,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

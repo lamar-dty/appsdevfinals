@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import '../constants/colors.dart';
+import '../store/task_store.dart';
+import '../models/app_notification.dart';
+import '../widgets/notification_item.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,141 +22,168 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _sheetController = DraggableScrollableController();
+    _sheetController.addListener(_onSheetChanged);
+    // Mark all as read as soon as home screen is visible
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      TaskStore.instance.markAllNotificationsRead();
+    });
+  }
+
+  void _onSheetChanged() {
+    // Also mark read when user drags the sheet up
+    if (_sheetController.isAttached && _sheetController.size > _snapPeek) {
+      TaskStore.instance.markAllNotificationsRead();
+    }
   }
 
   @override
   void dispose() {
+    _sheetController.removeListener(_onSheetChanged);
     _sheetController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        // ── BACKGROUND — header + stat cards ─────────────────
-        Positioned.fill(
-          child: SingleChildScrollView(
-            physics: const ClampingScrollPhysics(),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── HEADER ──────────────────────────────────────
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
-                      Text(
-                        'Welcome back, User!',
-                        style: TextStyle(
-                          color: kWhite,
-                          fontSize: 26,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.2,
-                        ),
-                      ),
-                      SizedBox(height: 6),
-                      Text(
-                        "Here's your overview for today",
-                        style: TextStyle(color: kSubtitle, fontSize: 14),
-                      ),
-                    ],
-                  ),
-                ),
+    return ListenableBuilder(
+      listenable: TaskStore.instance,
+      builder: (context, _) {
+        final store = TaskStore.instance;
+        final pct   = store.completionPercent;
+        final total = store.total;
 
-                const SizedBox(height: 20),
-
-                // ── STAT CARDS ────────────────────────────────────
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: const [
-                          _HomeStatCard(
-                            icon: Icons.check_circle_outline_rounded,
-                            iconColor: Color(0xFFE87070),
-                            title: 'Completed Tasks',
-                            value: '0%',
-                            subtitle: 'No tasks yet',
-                          ),
-                          SizedBox(width: 10),
-                          _HomeStatCard(
-                            icon: Icons.account_balance_wallet_rounded,
-                            iconColor: Color(0xFF3BBFA3),
-                            title: 'Wallet Balance',
-                            value: '₱0.00',
-                            subtitle: 'Current balance',
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: const [
-                          _HomeStatCard(
-                            icon: Icons.group_rounded,
-                            iconColor: Color(0xFF7070D8),
-                            title: 'Active Spaces',
-                            value: '0',
-                            subtitle: 'No spaces yet',
-                          ),
-                          SizedBox(width: 10),
-                          _HomeStatCard(
-                            icon: Icons.trending_up_rounded,
-                            iconColor: Color(0xFF9B88E8),
-                            title: 'Savings Increase',
-                            value: '0%',
-                            subtitle: 'vs last month',
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        // ── DRAGGABLE NOTIFICATION SHEET ─────────────────────
-        DraggableScrollableSheet(
-          controller: _sheetController,
-          initialChildSize: _snapPeek,
-          minChildSize: _snapPeek,
-          maxChildSize: _snapFull,
-          snap: true,
-          snapSizes: const [_snapPeek, _snapHalf, _snapFull],
-          builder: (context, scrollController) {
-            return Container(
-              decoration: const BoxDecoration(
-                color: kWhite,
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(28),
-                  topRight: Radius.circular(28),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black26,
-                    blurRadius: 16,
-                    offset: Offset(0, -4),
-                  ),
-                ],
-              ),
+        return Stack(
+          children: [
+            // ── BACKGROUND — header + stat cards ─────────────
+            Positioned.fill(
               child: SingleChildScrollView(
-                controller: scrollController,
                 physics: const ClampingScrollPhysics(),
-                child: const _NotificationSheet(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: const [
+                          Text(
+                            'Welcome back, User!',
+                            style: TextStyle(
+                              color: kWhite,
+                              fontSize: 26,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                          SizedBox(height: 6),
+                          Text(
+                            "Here's your overview for today",
+                            style: TextStyle(color: kSubtitle, fontSize: 14),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 20),
+
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              _HomeStatCard(
+                                icon: Icons.check_circle_outline_rounded,
+                                iconColor: const Color(0xFFE87070),
+                                title: 'Completed Tasks',
+                                value: total == 0
+                                    ? '0%'
+                                    : '${(pct * 100).round()}%',
+                                subtitle: total == 0
+                                    ? 'No tasks yet'
+                                    : '${store.completed} of $total done',
+                              ),
+                              const SizedBox(width: 10),
+                              const _HomeStatCard(
+                                icon: Icons.account_balance_wallet_rounded,
+                                iconColor: Color(0xFF3BBFA3),
+                                title: 'Wallet Balance',
+                                value: '₱0.00',
+                                subtitle: 'Current balance',
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              const _HomeStatCard(
+                                icon: Icons.group_rounded,
+                                iconColor: Color(0xFF7070D8),
+                                title: 'Active Spaces',
+                                value: '0',
+                                subtitle: 'No spaces yet',
+                              ),
+                              const SizedBox(width: 10),
+                              const _HomeStatCard(
+                                icon: Icons.trending_up_rounded,
+                                iconColor: Color(0xFF9B88E8),
+                                title: 'Savings Increase',
+                                value: '0%',
+                                subtitle: 'vs last month',
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            );
-          },
-        ),
-      ],
+            ),
+
+            // ── DRAGGABLE NOTIFICATION SHEET ─────────────────
+            DraggableScrollableSheet(
+              controller: _sheetController,
+              initialChildSize: _snapPeek,
+              minChildSize: _snapPeek,
+              maxChildSize: _snapFull,
+              snap: true,
+              snapSizes: const [_snapPeek, _snapHalf, _snapFull],
+              builder: (context, scrollController) {
+                return Container(
+                  decoration: const BoxDecoration(
+                    color: kWhite,
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(28),
+                      topRight: Radius.circular(28),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black26,
+                        blurRadius: 16,
+                        offset: Offset(0, -4),
+                      ),
+                    ],
+                  ),
+                  child: SingleChildScrollView(
+                    controller: scrollController,
+                    physics: const ClampingScrollPhysics(),
+                    child: _NotificationSheet(
+                      notifications: store.notifications,
+                      onClearAll: () => TaskStore.instance.clearNotifications(),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 }
 
-// ── Wallet-style stat card ────────────────────────────────────
+// ── Stat card ─────────────────────────────────────────────────
 class _HomeStatCard extends StatelessWidget {
   final IconData icon;
   final Color iconColor;
@@ -182,7 +212,6 @@ class _HomeStatCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Icon + title row
             Row(
               children: [
                 Icon(icon, color: iconColor, size: 14),
@@ -200,7 +229,6 @@ class _HomeStatCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            // Value
             Text(
               value,
               style: const TextStyle(
@@ -210,7 +238,6 @@ class _HomeStatCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 4),
-            // Subtitle
             Text(
               subtitle,
               style: TextStyle(
@@ -225,12 +252,86 @@ class _HomeStatCard extends StatelessWidget {
   }
 }
 
+// ── Sort options ──────────────────────────────────────────────
+enum _SortBy { newest, oldest, type }
+
 // ── Notification sheet ────────────────────────────────────────
-class _NotificationSheet extends StatelessWidget {
-  const _NotificationSheet();
+class _NotificationSheet extends StatefulWidget {
+  final List<AppNotification> notifications;
+  final VoidCallback onClearAll;
+
+  const _NotificationSheet({
+    required this.notifications,
+    required this.onClearAll,
+  });
+
+  @override
+  State<_NotificationSheet> createState() => _NotificationSheetState();
+}
+
+class _NotificationSheetState extends State<_NotificationSheet> {
+  _SortBy _sortBy = _SortBy.newest;
+
+  List<AppNotification> get _sorted {
+    final list = List<AppNotification>.from(widget.notifications);
+    switch (_sortBy) {
+      case _SortBy.newest:
+        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        break;
+      case _SortBy.oldest:
+        list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        break;
+      case _SortBy.type:
+        // overdue → due today → reminder → completed
+        int _rank(NotificationType t) {
+          switch (t) {
+            case NotificationType.taskOverdue:   return 0;
+            case NotificationType.taskDueToday:  return 1;
+            case NotificationType.taskReminder:  return 2;
+            case NotificationType.taskCompleted: return 3;
+          }
+        }
+        list.sort((a, b) => _rank(a.type).compareTo(_rank(b.type)));
+        break;
+    }
+    return list;
+  }
+
+  String get _sortLabel {
+    switch (_sortBy) {
+      case _SortBy.newest: return 'Newest';
+      case _SortBy.oldest: return 'Oldest';
+      case _SortBy.type:   return 'Type';
+    }
+  }
+
+  void _showSortSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _SortSheet(
+        current: _sortBy,
+        onSelected: (v) {
+          setState(() => _sortBy = v);
+          Navigator.pop(context);
+        },
+      ),
+    );
+  }
+
+  void _confirmClearAll() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ClearConfirmSheet(onConfirm: widget.onClearAll),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final notifications = widget.notifications;
+    final sorted = _sorted;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -251,7 +352,6 @@ class _NotificationSheet extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
                 'Notifications',
@@ -261,59 +361,402 @@ class _NotificationSheet extends StatelessWidget {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              GestureDetector(
-                onTap: () {},
-                child: Row(
-                  children: const [
-                    Text(
-                      'Sorted by',
-                      style: TextStyle(
-                          color: Color(0xFF6B7A99), fontSize: 13),
-                    ),
-                    SizedBox(width: 4),
-                    Icon(Icons.arrow_drop_down,
-                        color: Color(0xFF6B7A99), size: 20),
-                  ],
+              const Spacer(),
+              if (notifications.isNotEmpty) ...[
+                // Sorted by button
+                GestureDetector(
+                  onTap: _showSortSheet,
+                  child: Row(
+                    children: [
+                      Text(
+                        'Sorted by: $_sortLabel',
+                        style: const TextStyle(
+                          color: Color(0xFF6B7A99),
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(width: 3),
+                      const Icon(Icons.arrow_drop_down,
+                          color: Color(0xFF6B7A99), size: 20),
+                    ],
+                  ),
                 ),
-              ),
+                const SizedBox(width: 10),
+                // Clear all button
+                GestureDetector(
+                  onTap: _confirmClearAll,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 9, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFECEC),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      'Clear',
+                      style: TextStyle(
+                        color: Color(0xFFE87070),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
 
-        const SizedBox(height: 40),
+        const SizedBox(height: 20),
 
-        // Empty state
-        Center(
-          child: Column(
-            children: [
-              Icon(
-                Icons.notifications_none_rounded,
-                size: 72,
-                color: kNavyDark.withOpacity(0.12),
-              ),
-              const SizedBox(height: 14),
-              Text(
-                'No notifications yet',
-                style: TextStyle(
-                  color: kNavyDark.withOpacity(0.4),
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
+        if (notifications.isEmpty) ...[
+          const SizedBox(height: 20),
+          Center(
+            child: Column(
+              children: [
+                Icon(
+                  Icons.notifications_none_rounded,
+                  size: 72,
+                  color: kNavyDark.withOpacity(0.12),
                 ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                "You're all caught up!",
+                const SizedBox(height: 14),
+                Text(
+                  'No notifications yet',
+                  style: TextStyle(
+                    color: kNavyDark.withOpacity(0.4),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  "Create a task to get started!",
+                  style: TextStyle(
+                    color: kNavyDark.withOpacity(0.28),
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ] else ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
+              children: [
+                for (int i = 0; i < sorted.length; i++)
+                  NotificationItem(
+                    icon: sorted[i].icon,
+                    iconBgColor: sorted[i].iconBgColor,
+                    iconColor: sorted[i].iconColor,
+                    subtitle: sorted[i].subtitle,
+                    title: sorted[i].title,
+                    detail: sorted[i].detail,
+                    showDashedLine: i < sorted.length - 1,
+                    priority: sorted[i].priority,
+                    isRead: sorted[i].isRead,
+                  ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Center(
+              child: Text(
+                'No More Notifications',
                 style: TextStyle(
                   color: kNavyDark.withOpacity(0.28),
                   fontSize: 13,
                 ),
               ),
-            ],
+            ),
           ),
-        ),
+        ],
 
         const SizedBox(height: 80),
       ],
+    );
+  }
+}
+
+// ── Sort bottom sheet ─────────────────────────────────────────
+class _SortSheet extends StatelessWidget {
+  final _SortBy current;
+  final ValueChanged<_SortBy> onSelected;
+
+  const _SortSheet({required this.current, required this.onSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 28),
+      decoration: BoxDecoration(
+        color: kWhite,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.12),
+            blurRadius: 30,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 36, height: 4,
+            margin: const EdgeInsets.only(top: 12, bottom: 20),
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, 16),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Sort Notifications',
+                style: TextStyle(
+                  color: kNavyDark,
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+          _SortOption(
+            label: 'Newest first',
+            icon: Icons.arrow_downward_rounded,
+            selected: current == _SortBy.newest,
+            onTap: () => onSelected(_SortBy.newest),
+          ),
+          _SortOption(
+            label: 'Oldest first',
+            icon: Icons.arrow_upward_rounded,
+            selected: current == _SortBy.oldest,
+            onTap: () => onSelected(_SortBy.oldest),
+          ),
+          _SortOption(
+            label: 'By type',
+            icon: Icons.filter_list_rounded,
+            selected: current == _SortBy.type,
+            onTap: () => onSelected(_SortBy.type),
+            subtitle: 'Overdue → Due today → Upcoming → Done',
+            isLast: true,
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _SortOption extends StatelessWidget {
+  final String label;
+  final String? subtitle;
+  final IconData icon;
+  final bool selected;
+  final bool isLast;
+  final VoidCallback onTap;
+
+  const _SortOption({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+    this.subtitle,
+    this.isLast = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 36, height: 36,
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? const Color(0xFF9B88E8).withOpacity(0.12)
+                        : const Color(0xFFF4F5F7),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(icon,
+                      color: selected
+                          ? const Color(0xFF9B88E8)
+                          : const Color(0xFF6B7A99),
+                      size: 18),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: TextStyle(
+                          color: kNavyDark,
+                          fontSize: 15,
+                          fontWeight: selected
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      ),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle!,
+                          style: const TextStyle(
+                            color: Color(0xFF6B7A99),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (selected)
+                  const Icon(Icons.check_rounded,
+                      color: Color(0xFF9B88E8), size: 20),
+              ],
+            ),
+          ),
+        ),
+        if (!isLast)
+          Divider(height: 1, indent: 20, endIndent: 20,
+              color: Colors.grey.withOpacity(0.12)),
+      ],
+    );
+  }
+}
+
+// ── Clear confirm sheet ───────────────────────────────────────
+class _ClearConfirmSheet extends StatelessWidget {
+  final VoidCallback onConfirm;
+  const _ClearConfirmSheet({required this.onConfirm});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 28),
+      decoration: BoxDecoration(
+        color: kWhite,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.12),
+            blurRadius: 30,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 36, height: 4,
+            margin: const EdgeInsets.only(top: 12, bottom: 20),
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Container(
+            width: 56, height: 56,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFECEC),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.delete_sweep_rounded,
+                color: Color(0xFFE87070), size: 28),
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            'Clear all notifications?',
+            style: TextStyle(
+              color: kNavyDark,
+              fontSize: 17,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'This will remove all notifications.\nThis action cannot be undone.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: kNavyDark.withOpacity(0.45),
+              fontSize: 13,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 24),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                // Cancel
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: Container(
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF4F5F7),
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                      child: const Center(
+                        child: Text(
+                          'Cancel',
+                          style: TextStyle(
+                            color: Color(0xFF6B7A99),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Clear
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      Navigator.pop(context);
+                      onConfirm();
+                    },
+                    child: Container(
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE87070),
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                      child: const Center(
+                        child: Text(
+                          'Clear All',
+                          style: TextStyle(
+                            color: kWhite,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+        ],
+      ),
     );
   }
 }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import '../store/task_store.dart';
 import '../constants/colors.dart';
+import 'create_task_sheet.dart';
 
 class DashboardBottomNav extends StatelessWidget {
   final int selectedIndex;
@@ -50,25 +52,52 @@ class _NavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool selected = index == selectedIndex;
-    return GestureDetector(
-      onTap: () => onTap(index),
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOutBack,
-        transform: Matrix4.translationValues(0, selected ? -14 : 0, 0),
-        child: Container(
-          width: 48, height: 48,
-          decoration: BoxDecoration(
-            color: selected ? kWhite : Colors.transparent,
-            shape: BoxShape.circle,
-            boxShadow: selected
-                ? [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 12, spreadRadius: 1, offset: const Offset(0, 4))]
-                : [],
+    return ListenableBuilder(
+      listenable: TaskStore.instance,
+      builder: (context, _) {
+        final bool hasNotif = index == 0
+            && !selected
+            && TaskStore.instance.hasUnreadNotifications;
+        return GestureDetector(
+          onTap: () => onTap(index),
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOutBack,
+            transform: Matrix4.translationValues(0, selected ? -14 : 0, 0),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: 48, height: 48,
+                  decoration: BoxDecoration(
+                    color: selected ? kWhite : Colors.transparent,
+                    shape: BoxShape.circle,
+                    boxShadow: selected
+                        ? [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 12, spreadRadius: 1, offset: const Offset(0, 4))]
+                        : [],
+                  ),
+                  child: Icon(icon, size: 30, color: selected ? kTeal : kNavyDark.withOpacity(0.7)),
+                ),
+                if (hasNotif)
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE87070),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: kTeal, width: 1.5),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
-          child: Icon(icon, size: 30, color: selected ? kTeal : kNavyDark.withOpacity(0.7)),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -77,14 +106,15 @@ class _NavItem extends StatelessWidget {
 // FAB
 // ─────────────────────────────────────────────────────────────
 class DashboardFAB extends StatelessWidget {
-  const DashboardFAB({super.key});
+  final VoidCallback? onNavigateToCalendar;
+  const DashboardFAB({super.key, this.onNavigateToCalendar});
 
   void _showAddMenu(BuildContext context) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => const _AddMenuSheet(),
+      builder: (_) => _AddMenuSheet(onNavigateToCalendar: onNavigateToCalendar),
     );
   }
 
@@ -112,7 +142,8 @@ class DashboardFAB extends StatelessWidget {
 // Add Menu Sheet
 // ─────────────────────────────────────────────────────────────
 class _AddMenuSheet extends StatefulWidget {
-  const _AddMenuSheet();
+  final VoidCallback? onNavigateToCalendar;
+  const _AddMenuSheet({this.onNavigateToCalendar});
   @override
   State<_AddMenuSheet> createState() => _AddMenuSheetState();
 }
@@ -249,7 +280,21 @@ class _AddMenuSheetState extends State<_AddMenuSheet>
                           .animate(_cardSlides[i]),
                       child: FadeTransition(
                         opacity: _cardFades[i],
-                        child: _AddCard(item: _items[i], onTap: () => Navigator.pop(context)),
+                        child: _AddCard(
+                          item: _items[i],
+                          onTap: () {
+                            Navigator.pop(context);
+                            if (i == 0) {
+                              // Create Task
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                showCreateTaskSheet(
+                                  context,
+                                  onSaved: widget.onNavigateToCalendar,
+                                );
+                              });
+                            }
+                          },
+                        ),
                       ),
                     ),
                   ),
