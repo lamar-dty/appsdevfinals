@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../constants/colors.dart';
 
 class DashboardAppBar extends StatelessWidget implements PreferredSizeWidget {
-  const DashboardAppBar({super.key});
+  final VoidCallback? onMenuTap;
+
+  const DashboardAppBar({super.key, this.onMenuTap});
 
   @override
   Size get preferredSize => const Size.fromHeight(64);
@@ -17,43 +19,39 @@ class DashboardAppBar extends StatelessWidget implements PreferredSizeWidget {
       title: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24),
         child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          // ── Hamburger (no IconButton, no clipping) ──
-          GestureDetector(
-            onTap: () {
-              // TODO: open drawer
-            },
-            child: const _HamburgerIcon(),
-          ),
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            // ── Hamburger ────────────────────────────
+            GestureDetector(
+              onTap: onMenuTap,
+              child: const _HamburgerIcon(),
+            ),
 
-          // ── Avatar ──────────────────────────────────
-          GestureDetector(
-            onTap: () {
-              // TODO: open profile
-            },
-            child: Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: kWhite,
-                border: Border.all(color: kTeal, width: 2),
-              ),
-              child: ClipOval(
-                child: Image.network(
-                  'https://api.dicebear.com/7.x/bottts/png?seed=bunny',
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const Icon(
-                    Icons.person,
-                    color: kNavyDark,
-                    size: 24,
+            // ── Avatar ───────────────────────────────
+            GestureDetector(
+              onTap: () {},
+              child: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: kWhite,
+                  border: Border.all(color: kTeal, width: 2),
+                ),
+                child: ClipOval(
+                  child: Image.network(
+                    'https://api.dicebear.com/7.x/bottts/png?seed=bunny',
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const Icon(
+                      Icons.person,
+                      color: kNavyDark,
+                      size: 24,
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
         ),
       ),
     );
@@ -83,11 +81,8 @@ class _HamburgerPainter extends CustomPainter {
       ..strokeWidth = 3.0
       ..strokeCap = StrokeCap.round;
 
-    // Top line
     canvas.drawLine(Offset(0, 0), Offset(size.width, 0), paint);
-    // Middle line
     canvas.drawLine(Offset(0, size.height / 2), Offset(size.width, size.height / 2), paint);
-    // Bottom line
     canvas.drawLine(Offset(0, size.height), Offset(size.width, size.height), paint);
   }
 

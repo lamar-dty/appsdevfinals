@@ -1,8 +1,25 @@
 import 'package:flutter/material.dart';
 import 'constants/colors.dart';
 import 'screens/home_screen.dart';
+import 'screens/calendar_screen.dart';
+import 'screens/spaces_screen.dart';
+import 'screens/wallet_screen.dart';
+import 'screens/splash_screen.dart';
+import 'screens/login_screen.dart';
+import 'widgets/app_drawer.dart';
 import 'widgets/dashboard_appbar.dart';
 import 'widgets/dashboard_bottom_nav.dart';
+
+class ScrollBehaviorNoGlow extends ScrollBehavior {
+  const ScrollBehaviorNoGlow();
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const ClampingScrollPhysics();
+  @override
+  Widget buildOverscrollIndicator(
+          BuildContext context, Widget child, ScrollableDetails details) =>
+      child;
+}
 
 void main() {
   runApp(const MyApp());
@@ -14,13 +31,19 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Dashboard',
+      title: 'Nibble',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         scaffoldBackgroundColor: kNavyDark,
         fontFamily: 'SF Pro Display',
+        scrollbarTheme: const ScrollbarThemeData(),
       ),
-      home: const MainScaffold(),
+      scrollBehavior: const ScrollBehaviorNoGlow(),
+      home: const SplashScreen(),
+      routes: {
+        '/login': (_) => const LoginScreen(),
+        '/main': (_) => const MainScaffold(),
+      },
     );
   }
 }
@@ -34,23 +57,27 @@ class MainScaffold extends StatefulWidget {
 
 class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   final List<Widget> _pages = const [
     HomeScreen(),
-    Center(child: Text('Calendar', style: TextStyle(color: Colors.white))),
-    Center(child: Text('Groups', style: TextStyle(color: Colors.white))),
-    Center(child: Text('Wallet', style: TextStyle(color: Colors.white))),
+    CalendarScreen(),
+    SpacesScreen(),
+    WalletScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: _scaffoldKey,
       extendBody: true,
       backgroundColor: kNavyDark,
-      appBar: const DashboardAppBar(),
+      appBar: DashboardAppBar(
+        onMenuTap: () => _scaffoldKey.currentState?.openDrawer(),
+      ),
+      drawer: const AppDrawer(),
       body: _pages[_selectedIndex],
       bottomNavigationBar: MediaQuery(
-        // This removes the system bottom padding that makes the bar look taller
         data: MediaQuery.of(context).copyWith(padding: EdgeInsets.zero),
         child: DashboardBottomNav(
           selectedIndex: _selectedIndex,

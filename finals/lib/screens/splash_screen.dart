@@ -1,0 +1,263 @@
+import 'package:flutter/material.dart';
+import '../constants/colors.dart';
+import 'login_screen.dart';
+
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen>
+    with TickerProviderStateMixin {
+  late AnimationController _arcController;
+  late AnimationController _rabbitController;
+  late AnimationController _textController;
+  late AnimationController _fadeOutController;
+
+  late Animation<double> _arcScale;
+  late Animation<double> _rabbitSlide;
+  late Animation<double> _textFade;
+  late Animation<double> _fadeOut;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Arc/white bubble scales up
+    _arcController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    _arcScale = CurvedAnimation(parent: _arcController, curve: Curves.easeOutBack);
+
+    // Rabbit bounces up from bottom
+    _rabbitController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+    _rabbitSlide = CurvedAnimation(parent: _rabbitController, curve: Curves.easeOutBack);
+
+    // Text fades in
+    _textController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _textFade = CurvedAnimation(parent: _textController, curve: Curves.easeIn);
+
+    // Whole screen fades out before navigation
+    _fadeOutController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _fadeOut = CurvedAnimation(parent: _fadeOutController, curve: Curves.easeIn);
+
+    _runSequence();
+  }
+
+  Future<void> _runSequence() async {
+    await Future.delayed(const Duration(milliseconds: 200));
+    _arcController.forward();
+    await Future.delayed(const Duration(milliseconds: 300));
+    _rabbitController.forward();
+    await Future.delayed(const Duration(milliseconds: 400));
+    _textController.forward();
+    // Hold for a moment then fade out
+    await Future.delayed(const Duration(milliseconds: 1800));
+    await _fadeOutController.forward();
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) => const LoginScreen(),
+          transitionDuration: Duration.zero,
+        ),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _arcController.dispose();
+    _rabbitController.dispose();
+    _textController.dispose();
+    _fadeOutController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+
+    return AnimatedBuilder(
+      animation: _fadeOutController,
+      builder: (context, child) => Opacity(
+        opacity: 1.0 - _fadeOut.value,
+        child: child,
+      ),
+      child: Scaffold(
+        backgroundColor: kNavyDark,
+        body: Stack(
+          children: [
+            // ── White arc bubble (bottom half) ──────────────
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: AnimatedBuilder(
+                animation: _arcScale,
+                builder: (_, __) => Transform.scale(
+                  scale: _arcScale.value,
+                  alignment: Alignment.bottomCenter,
+                  child: SizedBox(
+                    height: size.height * 0.55,
+                    child: CustomPaint(
+                      painter: _ArcPainter(),
+                      size: Size(size.width, size.height * 0.55),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // ── Nibble text + subtitle ───────────────────────
+            Positioned(
+              bottom: size.height * 0.32,
+              left: 0,
+              right: 0,
+              child: AnimatedBuilder(
+                animation: _textFade,
+                builder: (_, __) => Opacity(
+                  opacity: _textFade.value,
+                  child: Column(
+                    children: [
+                      Text(
+                        'Nibble',
+                        style: TextStyle(
+                          fontFamily: 'Georgia',
+                          fontStyle: FontStyle.italic,
+                          fontSize: 52,
+                          fontWeight: FontWeight.bold,
+                          color: kTeal,
+                          letterSpacing: 1.5,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'A student life management app.',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: kNavyDark,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // ── Big rabbit (bottom) ──────────────────────────
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: AnimatedBuilder(
+                animation: _rabbitSlide,
+                builder: (_, __) {
+                  final slideOffset = (1 - _rabbitSlide.value) * size.height * 0.4;
+                  return Transform.translate(
+                    offset: Offset(0, slideOffset),
+                    child: SizedBox(
+                      height: size.height * 0.28,
+                      child: Image.asset(
+                        'assets/images/main.png',
+                        fit: BoxFit.contain,
+                        alignment: Alignment.bottomCenter,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── White arch background ──────────────────────────────────────
+// ignore: unused_element
+class _ArcPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = const Color(0xFFF5F7FA);
+    final path = Path();
+    path.moveTo(0, size.height * 0.25);
+    path.quadraticBezierTo(size.width / 2, -size.height * 0.05, size.width, size.height * 0.25);
+    path.lineTo(size.width, size.height);
+    path.lineTo(0, size.height);
+    path.close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter _) => false;
+}
+
+// ── Big navy rabbit body peeking at bottom ─────────────────────
+class _BigRabbitPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final navyPaint = Paint()..color = const Color(0xFF243D6D);
+    final whitePaint = Paint()..color = Colors.white;
+    final tealPaint = Paint()..color = const Color(0xFF90D0CB);
+
+    final cx = size.width / 2;
+
+    // ── Left ear ─────────────────────────────────────────────
+    _drawEar(canvas, navyPaint, cx - size.width * 0.18, size.height * 0.05, size);
+    // ── Right ear ────────────────────────────────────────────
+    _drawEar(canvas, navyPaint, cx + size.width * 0.18, size.height * 0.05, size);
+
+    // ── Body / head circle ───────────────────────────────────
+    final bodyRadius = size.width * 0.40;
+    canvas.drawCircle(
+      Offset(cx, size.height * 0.72),
+      bodyRadius,
+      navyPaint,
+    );
+
+    // ── Left eye white ───────────────────────────────────────
+    canvas.drawCircle(Offset(cx - size.width * 0.13, size.height * 0.58), size.width * 0.065, whitePaint);
+    canvas.drawCircle(Offset(cx - size.width * 0.11, size.height * 0.58), size.width * 0.038,
+        Paint()..color = const Color(0xFF1A1A2E));
+
+    // ── Right eye white ──────────────────────────────────────
+    canvas.drawCircle(Offset(cx + size.width * 0.13, size.height * 0.58), size.width * 0.065, whitePaint);
+    canvas.drawCircle(Offset(cx + size.width * 0.11, size.height * 0.58), size.width * 0.038,
+        Paint()..color = const Color(0xFF1A1A2E));
+
+    // ── Eye shine ────────────────────────────────────────────
+    canvas.drawCircle(Offset(cx - size.width * 0.09, size.height * 0.565), size.width * 0.012, whitePaint);
+    canvas.drawCircle(Offset(cx + size.width * 0.15, size.height * 0.565), size.width * 0.012, whitePaint);
+
+    // ── Nose (teal dot) ──────────────────────────────────────
+    canvas.drawCircle(Offset(cx, size.height * 0.645), size.width * 0.022, tealPaint);
+  }
+
+  void _drawEar(Canvas canvas, Paint paint, double cx, double tipY, Size size) {
+    final path = Path();
+    final baseY = size.height * 0.55;
+    final halfW = size.width * 0.075;
+    path.moveTo(cx - halfW, baseY);
+    path.quadraticBezierTo(cx - halfW * 1.3, tipY, cx, tipY - size.height * 0.02);
+    path.quadraticBezierTo(cx + halfW * 1.3, tipY, cx + halfW, baseY);
+    path.close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter _) => false;
+}
