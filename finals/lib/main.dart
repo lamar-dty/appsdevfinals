@@ -59,15 +59,26 @@ class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  final List<Widget> _pages = const [
-    HomeScreen(),
-    CalendarScreen(),
-    SpacesScreen(),
-    WalletScreen(),
-  ];
+  // ── Persisted calendar time range ────────────────────────
+  int _calStartHour = 6;
+  int _calEndHour   = 22;
 
   @override
   Widget build(BuildContext context) {
+    final pages = [
+      const HomeScreen(),
+      CalendarScreen(
+        calStartHour: _calStartHour,
+        calEndHour: _calEndHour,
+        onRangeChanged: (s, e) => setState(() {
+          _calStartHour = s;
+          _calEndHour   = e;
+        }),
+      ),
+      const SpacesScreen(),
+      const WalletScreen(),
+    ];
+
     return Scaffold(
       key: _scaffoldKey,
       extendBody: true,
@@ -76,7 +87,7 @@ class _MainScaffoldState extends State<MainScaffold> {
         onMenuTap: () => _scaffoldKey.currentState?.openDrawer(),
       ),
       drawer: const AppDrawer(),
-      body: _pages[_selectedIndex],
+      body: pages[_selectedIndex],
       bottomNavigationBar: MediaQuery(
         data: MediaQuery.of(context).copyWith(padding: EdgeInsets.zero),
         child: DashboardBottomNav(

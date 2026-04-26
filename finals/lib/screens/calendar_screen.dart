@@ -4,7 +4,16 @@ import '../widgets/calendar/weekly_planner_calendar.dart';
 import '../widgets/calendar/task_home_sheet.dart';
 
 class CalendarScreen extends StatefulWidget {
-  const CalendarScreen({super.key});
+  final int calStartHour;
+  final int calEndHour;
+  final void Function(int start, int end) onRangeChanged;
+
+  const CalendarScreen({
+    super.key,
+    required this.calStartHour,
+    required this.calEndHour,
+    required this.onRangeChanged,
+  });
 
   @override
   State<CalendarScreen> createState() => _CalendarScreenState();
@@ -18,8 +27,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
   late DraggableScrollableController _sheetController;
   final ScrollController _calendarScrollController = ScrollController();
 
-  // Tracks the sheet's current fractional size so we can
-  // pad the background scroll area to always show all content.
   double _sheetSize = _snapPeek;
 
   @override
@@ -45,24 +52,23 @@ class _CalendarScreenState extends State<CalendarScreen> {
   @override
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.of(context).size.height;
-
-    // Extra bottom padding = how much of the screen the sheet currently covers.
-    // This lets the user always scroll the calendar fully into view.
     final sheetHeightPx = screenHeight * _sheetSize;
 
     return Stack(
       children: [
         // ── CALENDAR BACKGROUND ──────────────────────────────
-        // Padded so content is never permanently hidden behind the sheet.
         Positioned.fill(
           child: SingleChildScrollView(
             controller: _calendarScrollController,
             physics: const ClampingScrollPhysics(),
             child: Padding(
-              // Add bottom padding equal to the current sheet height so the
-              // user can always scroll every row of the weekly grid into view.
               padding: EdgeInsets.only(bottom: sheetHeightPx),
-              child: const WeeklyPlannerCalendar(),
+              child: WeeklyPlannerCalendar(
+                peekHeight: sheetHeightPx,
+                startHour: widget.calStartHour,
+                endHour: widget.calEndHour,
+                onRangeChanged: widget.onRangeChanged,
+              ),
             ),
           ),
         ),
@@ -91,9 +97,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   ),
                 ],
               ),
-              // Only the sheet's own scroll controller is attached here.
-              // Touches above the sheet naturally fall through to the
-              // background SingleChildScrollView.
               child: SingleChildScrollView(
                 controller: scrollController,
                 physics: const ClampingScrollPhysics(),
