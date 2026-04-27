@@ -185,12 +185,13 @@ class _CreateEventSheetState extends State<_CreateEventSheet>
       opacity: _fadeAnim,
       child: Container(
         margin: EdgeInsets.only(bottom: bottom),
+        height: MediaQuery.of(context).size.height * 0.78,
         decoration: const BoxDecoration(
           color: Color(0xFF1A2D5A),
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: MainAxisSize.max,
           children: [
             // Handle
             Container(
@@ -251,9 +252,7 @@ class _CreateEventSheetState extends State<_CreateEventSheet>
             Divider(height: 1, color: kWhite.withOpacity(0.07)),
 
             // Body
-            ConstrainedBox(
-              constraints:
-                  BoxConstraints(maxHeight: mq.size.height * 0.75),
+            Expanded(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
                 child: Column(

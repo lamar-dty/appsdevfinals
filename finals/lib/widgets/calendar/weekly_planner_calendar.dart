@@ -1024,7 +1024,7 @@ class _LegendPanelState extends State<_LegendPanel> {
 
     return Container(
       width: 120,
-      padding: const EdgeInsets.fromLTRB(10, 10, 8, 16),
+      padding: const EdgeInsets.fromLTRB(10, 10, 8, 15.6),
       decoration: BoxDecoration(
         color: kWhite,
         borderRadius: BorderRadius.circular(14),

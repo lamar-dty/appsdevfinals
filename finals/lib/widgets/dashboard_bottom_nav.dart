@@ -3,6 +3,7 @@ import '../store/task_store.dart';
 import '../constants/colors.dart';
 import 'create_task_sheet.dart';
 import 'create_event_sheet.dart';
+import 'create_space_sheet.dart';
 
 class DashboardBottomNav extends StatelessWidget {
   final int selectedIndex;
@@ -298,6 +299,11 @@ class _AddMenuSheetState extends State<_AddMenuSheet>
                                   context,
                                   onSaved: widget.onNavigateToCalendar,
                                 );
+                              });
+                            } else if (i == 2) {
+                              // Create Space
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                showCreateSpaceSheet(context);
                               });
                             }
                           },
