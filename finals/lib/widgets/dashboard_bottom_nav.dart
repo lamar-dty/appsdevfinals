@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../store/task_store.dart';
 import '../constants/colors.dart';
 import 'create_task_sheet.dart';
+import 'create_event_sheet.dart';
 
 class DashboardBottomNav extends StatelessWidget {
   final int selectedIndex;
@@ -109,15 +110,6 @@ class DashboardFAB extends StatelessWidget {
   final VoidCallback? onNavigateToCalendar;
   const DashboardFAB({super.key, this.onNavigateToCalendar});
 
-  void _showAddMenu(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => _AddMenuSheet(onNavigateToCalendar: onNavigateToCalendar),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -128,7 +120,14 @@ class DashboardFAB extends StatelessWidget {
         boxShadow: [BoxShadow(color: kNavyDark.withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 4))],
       ),
       child: FloatingActionButton(
-        onPressed: () => _showAddMenu(context),
+        onPressed: () {
+          showModalBottomSheet(
+            context: context,
+            backgroundColor: Colors.transparent,
+            isScrollControlled: true,
+            builder: (_) => _AddMenuSheet(onNavigateToCalendar: onNavigateToCalendar),
+          );
+        },
         backgroundColor: Colors.transparent,
         elevation: 0,
         shape: const CircleBorder(side: BorderSide(color: kWhite, width: 3)),
@@ -288,6 +287,14 @@ class _AddMenuSheetState extends State<_AddMenuSheet>
                               // Create Task
                               WidgetsBinding.instance.addPostFrameCallback((_) {
                                 showCreateTaskSheet(
+                                  context,
+                                  onSaved: widget.onNavigateToCalendar,
+                                );
+                              });
+                            } else if (i == 1) {
+                              // Add Event
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                showCreateEventSheet(
                                   context,
                                   onSaved: widget.onNavigateToCalendar,
                                 );

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../constants/colors.dart';
 import '../../models/task.dart';
+import '../../models/event.dart';
 import '../../store/task_store.dart';
+import 'task_detail_sheet.dart';
 
 // ─────────────────────────────────────────────────────────────
 // Models
@@ -27,10 +29,12 @@ class PlanEvent {
   final int weekday;      // 1=Mon … 7=Sun
   final double startHour; // e.g. 9.0 = 9:00 AM
   final double endHour;   // e.g. 10.5 = 10:30 AM
-  final String taskId;    // original task id — for deduplication
+  final String taskId;    // original task/event id — for deduplication
   final String? notes;
   final TaskPriority priority;
   final bool hasTime;
+  final TaskStatus status;
+  final bool isEvent;     // true = from EventStore, false = from TaskStore
 
   const PlanEvent({
     required this.title,
@@ -42,7 +46,9 @@ class PlanEvent {
     required this.taskId,
     required this.priority,
     required this.hasTime,
+    required this.status,
     this.notes,
+    this.isEvent = false,
   });
 
   double get durationHours => endHour - startHour;
@@ -53,6 +59,13 @@ const _kCatAssignment   = 'assignment';
 const _kCatProject      = 'project';
 const _kCatAssessment   = 'assessment';
 const _kCatPersonalTask = 'personal_task';
+
+// Event category IDs
+const _kCatEventAcademic = 'event_academic';
+const _kCatEventPersonal = 'event_organization';
+const _kCatEventSocial   = 'event_social';
+const _kCatEventHealth   = 'event_health';
+const _kCatEventOther    = 'event_other';
 
 // ─────────────────────────────────────────────────────────────
 // WeeklyPlannerCalendar
@@ -83,10 +96,15 @@ class _WeeklyPlannerCalendarState extends State<WeeklyPlannerCalendar>
 
 
   final List<PlanCategory> _categories = [
-    PlanCategory(id: _kCatAssignment,   name: 'Assignment',    color: const Color(0xFF9B88E8)),
-    PlanCategory(id: _kCatProject,      name: 'Project',       color: const Color(0xFFE8D870)),
-    PlanCategory(id: _kCatAssessment,   name: 'Assessment',    color: const Color(0xFF90D0CB)),
-    PlanCategory(id: _kCatPersonalTask, name: 'Personal Task', color: const Color(0xFFE8A870)),
+    PlanCategory(id: _kCatAssignment,    name: 'Assignment',      color: const Color(0xFF9B88E8)),
+    PlanCategory(id: _kCatProject,       name: 'Project',         color: const Color(0xFFE8D870)),
+    PlanCategory(id: _kCatAssessment,    name: 'Assessment',      color: const Color(0xFF90D0CB)),
+    PlanCategory(id: _kCatPersonalTask,  name: 'Personal Task',   color: const Color(0xFFE8A870)),
+    PlanCategory(id: _kCatEventAcademic, name: 'Academic', color: const Color(0xFF4A90D9)),
+    PlanCategory(id: _kCatEventPersonal, name: 'Organization', color: const Color(0xFFE8A870)),
+    PlanCategory(id: _kCatEventSocial,   name: 'Social',   color: const Color(0xFFD96B8A)),
+    PlanCategory(id: _kCatEventHealth,   name: 'Health',   color: const Color(0xFF3BBFA3)),
+    PlanCategory(id: _kCatEventOther,    name: 'Other',    color: const Color(0xFFB0BAD3)),
   ];
 
   @override
@@ -118,6 +136,16 @@ class _WeeklyPlannerCalendarState extends State<WeeklyPlannerCalendar>
       case TaskCategory.project:      return _kCatProject;
       case TaskCategory.assessment:   return _kCatAssessment;
       case TaskCategory.personalTask: return _kCatPersonalTask;
+    }
+  }
+
+  String _eventCategoryId(EventCategory cat) {
+    switch (cat) {
+      case EventCategory.academic: return _kCatEventAcademic;
+      case EventCategory.organization: return _kCatEventPersonal;
+      case EventCategory.social:   return _kCatEventSocial;
+      case EventCategory.health:   return _kCatEventHealth;
+      case EventCategory.other:    return _kCatEventOther;
     }
   }
 
@@ -168,9 +196,9 @@ class _WeeklyPlannerCalendarState extends State<WeeklyPlannerCalendar>
             endHour = startHour + 1.0;
           }
         } else {
-          // No time — place at 8am as a 30-min placeholder
+          // No time — show as 1-hour block so text is readable
           startHour = 8.0;
-          endHour   = 8.5;
+          endHour   = 9.0;
         }
 
         // Clamp to grid bounds
@@ -188,16 +216,79 @@ class _WeeklyPlannerCalendarState extends State<WeeklyPlannerCalendar>
           notes:      task.notes,
           priority:   task.priority,
           hasTime:    task.dueTime != null,
+          status:     task.status,
         ));
 
         cursor = cursor.add(const Duration(days: 1));
       }
     }
+    // ── Events from EventStore ───────────────────────────────
+    for (final event in TaskStore.instance.events) {
+      final catId = _eventCategoryId(event.category);
+      if (!_isCategoryVisible(catId)) continue;
+
+      final evStart = DateTime(event.startDate.year, event.startDate.month, event.startDate.day);
+      final evEnd   = DateTime(event.endDate.year,   event.endDate.month,   event.endDate.day);
+
+      if (evEnd.isBefore(weekStart) || evStart.isAfter(weekEnd)) continue;
+
+      final clampedStart = evStart.isBefore(weekStart) ? weekStart : evStart;
+      final clampedEnd   = evEnd.isAfter(weekEnd) ? weekEnd : evEnd;
+
+      DateTime cursor = clampedStart;
+      while (!cursor.isAfter(clampedEnd)) {
+        double startHour;
+        double endHour;
+
+        if (event.startTime != null) {
+          startHour = event.startTime!.hour + event.startTime!.minute / 60.0;
+          if (event.endTime != null) {
+            endHour = event.endTime!.hour + event.endTime!.minute / 60.0;
+            if (endHour <= startHour) endHour = startHour + 1.0;
+          } else {
+            endHour = startHour + 1.0;
+          }
+        } else {
+          startHour = 8.0;
+          endHour   = 9.0;
+        }
+
+        startHour = startHour.clamp(widget.startHour.toDouble(), widget.endHour.toDouble());
+        endHour   = endHour.clamp(startHour, widget.endHour.toDouble());
+
+        events.add(PlanEvent(
+          title:      event.title,
+          categoryId: catId,
+          color:      event.category.color,
+          weekday:    cursor.weekday,
+          startHour:  startHour,
+          endHour:    endHour,
+          taskId:     event.id,
+          notes:      event.notes,
+          priority:   TaskPriority.medium,
+          hasTime:    event.startTime != null,
+          status:     TaskStatus.notStarted,
+          isEvent:    true,
+        ));
+
+        cursor = cursor.add(const Duration(days: 1));
+      }
+    }
+
     return events;
   }
 
-  /// Unique task count — multi-day tasks count as one regardless of how many day-columns they fill.
-  int get _visibleTaskCount => _visibleEvents.map((e) => e.taskId).toSet().length;
+  /// Unique task count (excludes events).
+  int get _visibleTaskCount => _visibleEvents.where((e) => !e.isEvent).map((e) => e.taskId).toSet().length;
+
+  /// Unique event count (from EventStore only).
+  int get _visibleEventCount => _visibleEvents.where((e) => e.isEvent).map((e) => e.taskId).toSet().length;
+
+  /// Total tasks in the selected week regardless of filter.
+  int get _totalWeekTaskCount {
+    final store = TaskStore.instance;
+    return _weekDays().expand((d) => store.tasksForDay(d)).map((t) => t.id).toSet().length;
+  }
 
   // ── Date helpers ──────────────────────────────────────────
   List<DateTime> _daysInMonth(DateTime month) {
@@ -387,118 +478,170 @@ class _WeeklyPlannerCalendarState extends State<WeeklyPlannerCalendar>
     final days     = _daysInMonth(_focusedMonth);
     final now      = DateTime.now();
     final weekDays = _weekDays();
+    final screenW  = MediaQuery.of(context).size.width;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // ── Mini calendar + filter panel ──────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                flex: 55,
-                child: _MiniCalendar(
-                  days: days,
-                  focusedMonth: _focusedMonth,
-                  selectedDay: _selectedDay,
-                  now: now,
-                  monthLabel: '${_fullMonth(_focusedMonth.month)} ${_focusedMonth.year}',
-                  visibleEvents: _visibleEvents,
-                  allTasks: TaskStore.instance.tasks,
-                  onPrev: () => setState(() =>
-                    _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1)),
-                  onNext: () => setState(() =>
-                    _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1)),
-                  onDayTap: (d) {
-                    _fadeCtrl.forward(from: 0);
-                    setState(() => _selectedDay = d);
-                  },
+    return SingleChildScrollView(
+      physics: const ClampingScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Mini calendar + filter panel ──────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 55,
+                  child: _MiniCalendar(
+                    days: days,
+                    focusedMonth: _focusedMonth,
+                    selectedDay: _selectedDay,
+                    now: now,
+                    monthLabel: '${_fullMonth(_focusedMonth.month)} ${_focusedMonth.year}',
+                    visibleEvents: _visibleEvents,
+                    allTasks: TaskStore.instance.tasks,
+                    onPrev: () => setState(() =>
+                      _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1)),
+                    onNext: () => setState(() =>
+                      _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1)),
+                    onDayTap: (d) {
+                      _fadeCtrl.forward(from: 0);
+                      setState(() => _selectedDay = d);
+                    },
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
-              _LegendPanel(categories: _categories, onToggle: _toggleCategory),
-            ],
+                const SizedBox(width: 10),
+                _LegendPanel(categories: _categories, onToggle: _toggleCategory),
+              ],
+            ),
           ),
-        ),
 
-        const SizedBox(height: 14),
+          const SizedBox(height: 14),
 
-        // ── Week header bar ───────────────────────────────
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: Row(
-            children: [
-              Container(
-                width: 3, height: 14,
-                decoration: BoxDecoration(
-                  color: kTeal, borderRadius: BorderRadius.circular(2)),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Week of ${weekDays.first.day} ${_shortMonth(weekDays.first.month)}',
-                style: TextStyle(
-                  color: kWhite.withOpacity(0.75),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const Spacer(),
-              // Events badge
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 200),
-                child: Container(
-                  key: ValueKey(_visibleTaskCount),
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+          // ── Week header bar ───────────────────────────────
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 3, height: 14,
                   decoration: BoxDecoration(
-                    color: kTeal.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: kTeal.withOpacity(0.3)),
-                  ),
-                  child: Text(
-                    '$_visibleTaskCount task${_visibleTaskCount == 1 ? '' : 's'}',
-                    style: const TextStyle(
-                        color: kTeal, fontSize: 10, fontWeight: FontWeight.w600),
+                    color: kTeal, borderRadius: BorderRadius.circular(2)),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Week of ${weekDays.first.day} ${_shortMonth(weekDays.first.month)}',
+                  style: TextStyle(
+                    color: kWhite.withOpacity(0.75),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              // Settings button
-              GestureDetector(
-                onTap: _openCalendarSettings,
-                child: Container(
-                  padding: const EdgeInsets.all(5),
-                  decoration: BoxDecoration(
-                    color: kWhite.withOpacity(0.07),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: kWhite.withOpacity(0.1)),
-                  ),
-                  child: Icon(Icons.access_time_rounded,
-                      color: kWhite.withOpacity(0.55), size: 14),
+                const Spacer(),
+                // Task + Event badges
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_visibleTaskCount > 0)
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 200),
+                        child: Container(
+                          key: ValueKey('t$_visibleTaskCount'),
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: kTeal.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: kTeal.withOpacity(0.3)),
+                          ),
+                          child: Text(
+                            '$_visibleTaskCount task${_visibleTaskCount == 1 ? '' : 's'}',
+                            style: const TextStyle(
+                                color: kTeal, fontSize: 10, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    if (_visibleTaskCount > 0 && _visibleEventCount > 0)
+                      const SizedBox(width: 5),
+                    if (_visibleEventCount > 0)
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 200),
+                        child: Container(
+                          key: ValueKey('e$_visibleEventCount'),
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF4A90D9).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: const Color(0xFF4A90D9).withOpacity(0.3)),
+                          ),
+                          child: Text(
+                            '$_visibleEventCount event${_visibleEventCount == 1 ? '' : 's'}',
+                            style: const TextStyle(
+                                color: Color(0xFF4A90D9), fontSize: 10, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    if (_visibleTaskCount == 0 && _visibleEventCount == 0 && _totalWeekTaskCount > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: kTeal.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: kTeal.withOpacity(0.3)),
+                        ),
+                        child: const Text(
+                          '0 tasks',
+                          style: TextStyle(
+                              color: kTeal, fontSize: 10, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                  ],
                 ),
-              ),
-            ],
+                // Settings button
+                const SizedBox(width: 12),
+                GestureDetector(
+                  onTap: _openCalendarSettings,
+                  child: Container(
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      color: kWhite.withOpacity(0.07),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: kWhite.withOpacity(0.1)),
+                    ),
+                    child: Icon(Icons.access_time_rounded,
+                        color: kWhite.withOpacity(0.55), size: 14),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
 
-        const SizedBox(height: 8),
+          const SizedBox(height: 8),
 
-        // ── Weekly grid ───────────────────────────────────
-        FadeTransition(
-          opacity: CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeIn),
-          child: _WeeklyGrid(
-            weekDays: weekDays,
-            now: now,
-            visibleEvents: _visibleEvents,
-            startHour: widget.startHour,
-            endHour: widget.endHour,
-            peekHeight: widget.peekHeight,
+          // ── Weekly grid — explicit tall height, scrolls with page ─
+          FadeTransition(
+            opacity: CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeIn),
+            child: _WeeklyGrid(
+              weekDays: weekDays,
+              now: now,
+              visibleEvents: _visibleEvents,
+              startHour: widget.startHour,
+              endHour: widget.endHour,
+              screenWidth: screenW,
+              onEventTap: (taskId, isEvent) {
+                if (isEvent) {
+                  showEventDetailSheet(context, taskId);
+                } else {
+                  showTaskDetailSheet(context, taskId);
+                }
+              },
+            ),
           ),
-        ),
 
-        const SizedBox(height: 20),
-      ],
+          // Bottom padding so last hours aren't hidden under the task sheet
+          SizedBox(height: widget.peekHeight + 20),
+        ],
+      ),
     );
   }
 }
@@ -725,17 +868,163 @@ class _IconBtn extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // Legend / filter panel
 // ─────────────────────────────────────────────────────────────
-class _LegendPanel extends StatelessWidget {
+class _LegendPanel extends StatefulWidget {
   final List<PlanCategory> categories;
   final void Function(PlanCategory) onToggle;
 
   const _LegendPanel({required this.categories, required this.onToggle});
 
   @override
+  State<_LegendPanel> createState() => _LegendPanelState();
+}
+
+class _LegendPanelState extends State<_LegendPanel> {
+  bool _tasksExpanded = true;
+  bool _eventsExpanded = true;
+
+  static const _taskIds = {
+    _kCatAssignment,
+    _kCatProject,
+    _kCatAssessment,
+    _kCatPersonalTask,
+  };
+  static const _eventIds = {
+    _kCatEventAcademic,
+    _kCatEventPersonal,
+    _kCatEventSocial,
+    _kCatEventHealth,
+    _kCatEventOther,
+  };
+
+  bool get _allTasksVisible =>
+      widget.categories.where((c) => _taskIds.contains(c.id)).every((c) => c.visible);
+  bool get _someTasksVisible =>
+      widget.categories.where((c) => _taskIds.contains(c.id)).any((c) => c.visible);
+
+  bool get _allEventsVisible =>
+      widget.categories.where((c) => _eventIds.contains(c.id)).every((c) => c.visible);
+  bool get _someEventsVisible =>
+      widget.categories.where((c) => _eventIds.contains(c.id)).any((c) => c.visible);
+
+  void _toggleAllTasks() {
+    final target = !_allTasksVisible;
+    for (final cat in widget.categories) {
+      if (_taskIds.contains(cat.id) && cat.visible != target) {
+        widget.onToggle(cat);
+      }
+    }
+  }
+
+  void _toggleAllEvents() {
+    final target = !_allEventsVisible;
+    for (final cat in widget.categories) {
+      if (_eventIds.contains(cat.id) && cat.visible != target) {
+        widget.onToggle(cat);
+      }
+    }
+  }
+
+  Widget _buildCheckbox(PlanCategory cat) {
+    return GestureDetector(
+      onTap: () => widget.onToggle(cat),
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 5.0),
+        child: Row(
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              width: 12, height: 12,
+              decoration: BoxDecoration(
+                color: cat.visible ? cat.color : Colors.transparent,
+                border: Border.all(
+                  color: cat.visible ? cat.color : cat.color.withOpacity(0.35),
+                  width: 1.5,
+                ),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: cat.visible
+                  ? const Icon(Icons.check_rounded, size: 8, color: Colors.white)
+                  : null,
+            ),
+            const SizedBox(width: 5),
+            Flexible(
+              child: AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 160),
+                style: TextStyle(
+                  color: cat.visible ? kNavyDark : kNavyDark.withOpacity(0.25),
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w600,
+                ),
+                child: Text(cat.name, overflow: TextOverflow.ellipsis, maxLines: 1),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildParentRow({
+    required String label,
+    required bool allVisible,
+    required bool someVisible,
+    required Color color,
+    required bool expanded,
+    required VoidCallback onToggleAll,
+    required VoidCallback onToggleExpand,
+  }) {
+    final parentColor = (allVisible || someVisible) ? color : color.withOpacity(0.3);
+    return GestureDetector(
+      onTap: onToggleExpand,
+      behavior: HitTestBehavior.opaque,
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: onToggleAll,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              width: 12, height: 12,
+              decoration: BoxDecoration(
+                color: (allVisible || someVisible) ? parentColor : Colors.transparent,
+                border: Border.all(color: parentColor, width: 1.5),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: allVisible
+                  ? const Icon(Icons.check_rounded, size: 8, color: Colors.white)
+                  : someVisible
+                      ? const Icon(Icons.remove_rounded, size: 8, color: Colors.white)
+                      : null,
+            ),
+          ),
+          const SizedBox(width: 5),
+          Expanded(
+            child: Text(label,
+              style: TextStyle(
+                color: (allVisible || someVisible) ? kNavyDark : kNavyDark.withOpacity(0.25),
+                fontSize: 9.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          AnimatedRotation(
+            turns: expanded ? 0 : -0.25,
+            duration: const Duration(milliseconds: 160),
+            child: Icon(Icons.expand_more_rounded, size: 13, color: kNavyDark.withOpacity(0.4)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final taskCats  = widget.categories.where((c) => _taskIds.contains(c.id)).toList();
+    final eventCats = widget.categories.where((c) => _eventIds.contains(c.id)).toList();
+
     return Container(
-      width: 116,
-      padding: const EdgeInsets.fromLTRB(12, 12, 8, 57),
+      width: 120,
+      padding: const EdgeInsets.fromLTRB(10, 10, 8, 16),
       decoration: BoxDecoration(
         color: kWhite,
         borderRadius: BorderRadius.circular(14),
@@ -750,6 +1039,7 @@ class _LegendPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Header ──────────────────────────────────
           Row(
             children: [
               Icon(Icons.tune_rounded, size: 10, color: kNavyDark.withOpacity(0.4)),
@@ -766,49 +1056,52 @@ class _LegendPanel extends StatelessWidget {
           ),
           const SizedBox(height: 8),
 
-          ...categories.map((cat) {
-            return GestureDetector(
-              onTap: () => onToggle(cat),
-              behavior: HitTestBehavior.opaque,
-              child: Padding(
-                padding: const EdgeInsets.only(top: 6.0, bottom: 1.0),
-                child: Row(
-                  children: [
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 160),
-                      width: 13, height: 13,
-                      decoration: BoxDecoration(
-                        color: cat.visible ? cat.color : Colors.transparent,
-                        border: Border.all(
-                          color: cat.visible ? cat.color : cat.color.withOpacity(0.3),
-                          width: 1.5,
-                        ),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: cat.visible
-                          ? const Icon(Icons.check_rounded, size: 9, color: Colors.white)
-                          : null,
-                    ),
-                    const SizedBox(width: 5),
-                    Flexible(
-                      child: AnimatedDefaultTextStyle(
-                        duration: const Duration(milliseconds: 160),
-                        style: TextStyle(
-                          color: cat.visible
-                              ? kNavyDark
-                              : kNavyDark.withOpacity(0.25),
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        child: Text(cat.name,
-                            overflow: TextOverflow.ellipsis, maxLines: 1),
-                      ),
-                    ),
-                  ],
-                ),
+          // ── TASKS group ─────────────────────────────
+          _buildParentRow(
+            label: 'Tasks',
+            allVisible: _allTasksVisible,
+            someVisible: _someTasksVisible,
+            color: const Color(0xFF9B88E8),
+            expanded: _tasksExpanded,
+            onToggleAll: _toggleAllTasks,
+            onToggleExpand: () => setState(() => _tasksExpanded = !_tasksExpanded),
+          ),
+          AnimatedCrossFade(
+            firstChild: Padding(
+              padding: const EdgeInsets.only(left: 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: taskCats.map(_buildCheckbox).toList(),
               ),
-            );
-          }).toList(),
+            ),
+            secondChild: const SizedBox.shrink(),
+            crossFadeState: _tasksExpanded ? CrossFadeState.showFirst : CrossFadeState.showSecond,
+            duration: const Duration(milliseconds: 180),
+          ),
+
+          // ── EVENTS group ────────────────────────────
+          const SizedBox(height: 6),
+          _buildParentRow(
+            label: 'Events',
+            allVisible: _allEventsVisible,
+            someVisible: _someEventsVisible,
+            color: const Color(0xFF4A90D9),
+            expanded: _eventsExpanded,
+            onToggleAll: _toggleAllEvents,
+            onToggleExpand: () => setState(() => _eventsExpanded = !_eventsExpanded),
+          ),
+          AnimatedCrossFade(
+            firstChild: Padding(
+              padding: const EdgeInsets.only(left: 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: eventCats.map(_buildCheckbox).toList(),
+              ),
+            ),
+            secondChild: const SizedBox.shrink(),
+            crossFadeState: _eventsExpanded ? CrossFadeState.showFirst : CrossFadeState.showSecond,
+            duration: const Duration(milliseconds: 180),
+          ),
         ],
       ),
     );
@@ -816,7 +1109,7 @@ class _LegendPanel extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Weekly time grid — auto-scrolls to current time on open
+// Weekly time grid — fixed height, scrolls with the page
 // ─────────────────────────────────────────────────────────────
 class _WeeklyGrid extends StatefulWidget {
   final List<DateTime> weekDays;
@@ -824,7 +1117,8 @@ class _WeeklyGrid extends StatefulWidget {
   final List<PlanEvent> visibleEvents;
   final int startHour;
   final int endHour;
-  final double peekHeight;
+  final double screenWidth;
+  final void Function(String taskId, bool isEvent) onEventTap;
 
   const _WeeklyGrid({
     required this.weekDays,
@@ -832,7 +1126,8 @@ class _WeeklyGrid extends StatefulWidget {
     required this.visibleEvents,
     required this.startHour,
     required this.endHour,
-    this.peekHeight = 0,
+    required this.screenWidth,
+    required this.onEventTap,
   });
 
   @override
@@ -844,45 +1139,7 @@ class _WeeklyGridState extends State<_WeeklyGrid> {
   static const double _timeW = 36.0;
   static const double _gap   = 5.0;
 
-  late ScrollController _scrollCtrl;
-
   int get _hours => widget.endHour - widget.startHour;
-
-  @override
-  void initState() {
-    super.initState();
-    _scrollCtrl = ScrollController();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToNow());
-  }
-
-  @override
-  void didUpdateWidget(_WeeklyGrid old) {
-    super.didUpdateWidget(old);
-    // Re-scroll if the range changes
-    if (old.startHour != widget.startHour || old.endHour != widget.endHour) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToNow());
-    }
-  }
-
-  @override
-  void dispose() {
-    _scrollCtrl.dispose();
-    super.dispose();
-  }
-
-  void _scrollToNow() {
-    final now     = widget.now;
-    final nowFrac = (now.hour + now.minute / 60.0) - widget.startHour;
-    // Clamp so we don't scroll past the grid; offset slightly above "now"
-    final target  = (nowFrac * _rowH - 80).clamp(0.0, _rowH * _hours);
-    if (_scrollCtrl.hasClients) {
-      _scrollCtrl.animateTo(
-        target,
-        duration: const Duration(milliseconds: 500),
-        curve: Curves.easeOutCubic,
-      );
-    }
-  }
 
   String _timeLabel(int hour) {
     if (hour < 12) return '${hour}am';
@@ -893,11 +1150,15 @@ class _WeeklyGridState extends State<_WeeklyGrid> {
   @override
   Widget build(BuildContext context) {
     const dayNames = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+    final gridW = widget.screenWidth - 28; // 14px padding each side
+    final colW  = (gridW - _timeW - _gap) / 7;
+    final totalH = _rowH * (_hours + 1);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           // ── Day header ───────────────────────────────────
           Row(
@@ -945,34 +1206,24 @@ class _WeeklyGridState extends State<_WeeklyGrid> {
             ],
           ),
 
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
 
-          // ── Scrollable grid body ──────────────────────────
-          // Viewport = screen height minus appbar, top UI, bottom nav,
-          // and whatever the peeking sheet currently covers.
+          // ── All-day strip (tasks with no time set) ────────
+          _buildAllDayStrip(colW, gridW),
+
+          const SizedBox(height: 4),
+
+          // ── Full-height grid — scrolls with the page ──────
           SizedBox(
-            height: (MediaQuery.of(context).size.height * 0.52 - widget.peekHeight).clamp(_rowH * 4, _rowH * 14),
-            child: SingleChildScrollView(
-              controller: _scrollCtrl,
-              physics: const ClampingScrollPhysics(),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final gridW = constraints.maxWidth;
-                  final colW  = (gridW - _timeW - _gap) / 7;
-
-                  return SizedBox(
-                    height: _rowH * (_hours + 1),
-                    child: Stack(
-                      clipBehavior: Clip.hardEdge,
-                      children: [
-                        ..._buildBackground(),
-                        ..._buildTimeLine(colW),
-                        ..._buildEvents(colW),
-                      ],
-                    ),
-                  );
-                },
-              ),
+            width: gridW,
+            height: totalH,
+            child: Stack(
+              clipBehavior: Clip.hardEdge,
+              children: [
+                ..._buildBackground(),
+                ..._buildTimeLine(colW),
+                ..._buildTimedEvents(colW),
+              ],
             ),
           ),
         ],
@@ -998,9 +1249,9 @@ class _WeeklyGridState extends State<_WeeklyGrid> {
                 child: Text(_timeLabel(hour),
                   textAlign: TextAlign.right,
                   style: TextStyle(
-                    color: kWhite.withOpacity(0.28),
+                    color: kWhite.withOpacity(0.50),
                     fontSize: 9,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
@@ -1008,19 +1259,22 @@ class _WeeklyGridState extends State<_WeeklyGrid> {
             SizedBox(width: _gap),
             ...List.generate(7, (col) {
               final isWknd = col >= 5;
+              final isHalfHour = false; // placeholder for future
               return Expanded(
                 child: Container(
                   decoration: BoxDecoration(
-                    color: isWknd ? kWhite.withOpacity(0.025) : Colors.transparent,
+                    color: isWknd ? kWhite.withOpacity(0.03) : Colors.transparent,
                     border: Border(
                       top: BorderSide(
                         color: i == 0
-                            ? kWhite.withOpacity(0.18)
-                            : kWhite.withOpacity(0.06),
+                            ? kWhite.withOpacity(0.22)
+                            : kWhite.withOpacity(0.07),
                         width: 0.5,
                       ),
                       left: BorderSide(
-                        color: kWhite.withOpacity(0.05),
+                        color: col == 0
+                            ? kWhite.withOpacity(0.12)
+                            : kWhite.withOpacity(0.06),
                         width: 0.5,
                       ),
                     ),
@@ -1067,13 +1321,98 @@ class _WeeklyGridState extends State<_WeeklyGrid> {
     ];
   }
 
-  List<Widget> _buildEvents(double colW) {
-    return widget.visibleEvents.map((event) {
+  /// All-day strip — shows tasks that have no time set
+  Widget _buildAllDayStrip(double colW, double gridW) {
+    final allDayEvents = widget.visibleEvents.where((e) => !e.hasTime).toList();
+
+    // Group by weekday column
+    final Map<int, List<PlanEvent>> byCol = {};
+    for (final e in allDayEvents) {
+      final col = e.weekday - 1;
+      if (col >= 0 && col <= 6) byCol.putIfAbsent(col, () => []).add(e);
+    }
+
+    final hasAny = byCol.isNotEmpty;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Time column label
+        SizedBox(
+          width: _timeW + _gap,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: Text(
+              hasAny ? 'ALL\nDAY' : '',
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: kWhite.withOpacity(0.35),
+                fontSize: 7,
+                fontWeight: FontWeight.w700,
+                height: 1.2,
+              ),
+            ),
+          ),
+        ),
+        // 7 day columns
+        ...List.generate(7, (col) {
+          final events = byCol[col] ?? [];
+          return SizedBox(
+            width: colW,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: events.take(2).map((e) {
+                return GestureDetector(
+                  onTap: () => widget.onEventTap(e.taskId, e.isEvent),
+                  child: Container(
+                  margin: const EdgeInsets.only(bottom: 2, right: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: e.color.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: e.color.withOpacity(0.5), width: 0.5),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 3, height: 3,
+                        margin: const EdgeInsets.only(right: 2),
+                        decoration: BoxDecoration(color: e.color, shape: BoxShape.circle),
+                      ),
+                      Expanded(
+                        child: Text(
+                          e.title,
+                          style: TextStyle(
+                            color: e.color.withOpacity(0.9),
+                            fontSize: 7,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      _StatusPill(status: e.status),
+                    ],
+                  ),
+                  ),
+                );
+              }).toList(),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  List<Widget> _buildTimedEvents(double colW) {
+    return widget.visibleEvents
+        .where((e) => e.hasTime) // only timed tasks go in the grid
+        .map((event) {
       final col = event.weekday - 1;
       if (col < 0 || col > 6) return const SizedBox.shrink();
 
       final top    = (event.startHour - widget.startHour) * _rowH;
-      final height = (event.durationHours * _rowH - 4).clamp(14.0, double.infinity);
+      final height = (event.durationHours * _rowH - 4).clamp(18.0, double.infinity);
       final left   = _timeW + _gap + col * colW + 1.5;
 
       if (top > _rowH * _hours || top + height < 0) return const SizedBox.shrink();
@@ -1083,7 +1422,10 @@ class _WeeklyGridState extends State<_WeeklyGrid> {
         left: left,
         width: colW - 3,
         height: height,
-        child: _EventBlock(event: event),
+        child: GestureDetector(
+          onTap: () => widget.onEventTap(event.taskId, event.isEvent),
+          child: _EventBlock(event: event),
+        ),
       );
     }).toList();
   }
@@ -1112,6 +1454,14 @@ class _EventBlock extends StatelessWidget {
     }
   }
 
+  Color _statusColor(TaskStatus s) {
+    switch (s) {
+      case TaskStatus.completed:  return const Color(0xFF3BBFA3);
+      case TaskStatus.inProgress: return const Color(0xFFE8D870);
+      case TaskStatus.notStarted: return const Color(0xFF4A5568);
+    }
+  }
+
   String _formatHour(double h) {
     final hour   = h.floor();
     final minute = ((h - hour) * 60).round();
@@ -1126,83 +1476,158 @@ class _EventBlock extends StatelessWidget {
     final tall = event.durationHours >= 1.0;
     final veryTall = event.durationHours >= 1.5;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: event.color.withOpacity(0.16),
-        borderRadius: BorderRadius.circular(7),
-        border: Border(left: BorderSide(color: event.color, width: 3.5)),
-        boxShadow: [
-          BoxShadow(
-            color: event.color.withOpacity(0.15),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: Stack(
+        clipBehavior: Clip.hardEdge,
+        children: [
+          // Background fill + uniform border
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                color: event.color.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: event.color.withOpacity(0.3), width: 0.5),
+              ),
+            ),
+          ),
+          // Left accent bar
+          Positioned(
+            left: 0, top: 0, bottom: 0,
+            width: 3,
+            child: Container(color: event.color),
+          ),
+          // Status stripe — top edge coloured by task status
+          Positioned(
+            left: 3, top: 0, right: 0,
+            height: 2.5,
+            child: Container(
+              decoration: BoxDecoration(
+                color: _statusColor(event.status),
+                borderRadius: const BorderRadius.only(
+                  topRight: Radius.circular(6),
+                ),
+              ),
+            ),
+          ),
+          // Content — clipped to box, no Expanded, no unbounded flex
+          Positioned.fill(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(6, 2, 3, 2),
+              child: OverflowBox(
+                alignment: Alignment.topLeft,
+                minHeight: 0,
+                maxHeight: double.infinity,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Priority dot + time row
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 5, height: 5,
+                          decoration: BoxDecoration(
+                            color: priorityColor,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        if (tall && event.hasTime) ...[
+                          const SizedBox(width: 3),
+                          Flexible(
+                            child: Text(
+                              '${_formatHour(event.startHour)}–${_formatHour(event.endHour)}',
+                              style: TextStyle(
+                                color: event.color.withOpacity(0.8),
+                                fontSize: 7,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.clip,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    // Title
+                    Text(
+                      event.title,
+                      style: TextStyle(
+                        color: event.color.withOpacity(0.95),
+                        fontSize: 8.5,
+                        fontWeight: FontWeight.w800,
+                        height: 1.15,
+                      ),
+                      maxLines: tall ? 2 : 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    // Notes
+                    if (veryTall && event.notes != null && event.notes!.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        event.notes!,
+                        style: TextStyle(
+                          color: event.color.withOpacity(0.55),
+                          fontSize: 7,
+                          height: 1.3,
+                          fontStyle: FontStyle.italic,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 2,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
           ),
         ],
       ),
-      padding: const EdgeInsets.fromLTRB(5, 3, 4, 3),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Title row with priority dot
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  event.title,
-                  style: TextStyle(
-                    color: event.color,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w800,
-                    height: 1.25,
-                  ),
-                  maxLines: tall ? 2 : 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const SizedBox(width: 2),
-              Container(
-                width: 7, height: 7,
-                margin: const EdgeInsets.only(top: 2),
-                decoration: BoxDecoration(
-                  color: priorityColor,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ],
-          ),
+    );
+  }
+}
+// ─────────────────────────────────────────────────────────────
+// Status pill — for all-day strip chips
+// ─────────────────────────────────────────────────────────────
+class _StatusPill extends StatelessWidget {
+  final TaskStatus status;
+  const _StatusPill({required this.status});
 
-          // Time label
-          if (tall && event.hasTime) ...[
-            const SizedBox(height: 2),
-            Text(
-              '${_formatHour(event.startHour)} – ${_formatHour(event.endHour)}',
-              style: TextStyle(
-                color: event.color.withOpacity(0.7),
-                fontSize: 7.5,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
+  Color get _color {
+    switch (status) {
+      case TaskStatus.completed:  return const Color(0xFF3BBFA3);
+      case TaskStatus.inProgress: return const Color(0xFFE8D870);
+      case TaskStatus.notStarted: return const Color(0xFF4A5568);
+    }
+  }
 
-          // Notes
-          if (veryTall && event.notes != null && event.notes!.isNotEmpty) ...[
-            const SizedBox(height: 3),
-            Expanded(
-              child: Text(
-                event.notes!,
-                style: TextStyle(
-                  color: event.color.withOpacity(0.55),
-                  fontSize: 7.5,
-                  height: 1.3,
-                  fontStyle: FontStyle.italic,
-                ),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 3,
-              ),
-            ),
-          ],
-        ],
+  String get _label {
+    switch (status) {
+      case TaskStatus.completed:  return '✓';
+      case TaskStatus.inProgress: return '▶';
+      case TaskStatus.notStarted: return '○';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 2.5, vertical: 1),
+      decoration: BoxDecoration(
+        color: _color.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: _color.withOpacity(0.5), width: 0.5),
+      ),
+      child: Text(
+        _label,
+        style: TextStyle(
+          color: _color,
+          fontSize: 6,
+          fontWeight: FontWeight.bold,
+          height: 1,
+        ),
       ),
     );
   }

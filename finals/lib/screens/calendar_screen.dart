@@ -25,7 +25,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
   static const double _snapFull = 1.0;
 
   late DraggableScrollableController _sheetController;
-  final ScrollController _calendarScrollController = ScrollController();
 
   double _sheetSize = _snapPeek;
 
@@ -45,7 +44,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
   void dispose() {
     _sheetController.removeListener(_onSheetSizeChanged);
     _sheetController.dispose();
-    _calendarScrollController.dispose();
     super.dispose();
   }
 
@@ -58,18 +56,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
       children: [
         // ── CALENDAR BACKGROUND ──────────────────────────────
         Positioned.fill(
-          child: SingleChildScrollView(
-            controller: _calendarScrollController,
-            physics: const ClampingScrollPhysics(),
-            child: Padding(
-              padding: EdgeInsets.only(bottom: sheetHeightPx),
-              child: WeeklyPlannerCalendar(
-                peekHeight: sheetHeightPx,
-                startHour: widget.calStartHour,
-                endHour: widget.calEndHour,
-                onRangeChanged: widget.onRangeChanged,
-              ),
-            ),
+          child: WeeklyPlannerCalendar(
+            peekHeight: sheetHeightPx,
+            startHour: widget.calStartHour,
+            endHour: widget.calEndHour,
+            onRangeChanged: widget.onRangeChanged,
           ),
         ),
 

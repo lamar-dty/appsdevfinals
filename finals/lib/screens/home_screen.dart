@@ -18,21 +18,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
   late DraggableScrollableController _sheetController;
 
+  // Track whether the sheet has been opened past the peek level so we only
+  // mark notifications read once the user actually views them.
+  bool _hasMarkedReadThisSession = false;
+
   @override
   void initState() {
     super.initState();
     _sheetController = DraggableScrollableController();
     _sheetController.addListener(_onSheetChanged);
-    // Mark all as read as soon as home screen is visible
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      TaskStore.instance.markAllNotificationsRead();
-    });
+    // Do NOT mark as read here — the red dot should persist until the
+    // user actually opens the notification sheet.
   }
 
   void _onSheetChanged() {
-    // Also mark read when user drags the sheet up
-    if (_sheetController.isAttached && _sheetController.size > _snapPeek) {
+    if (!_sheetController.isAttached) return;
+    // Mark all read only once the user drags the sheet past the peek level
+    if (_sheetController.size > _snapPeek && !_hasMarkedReadThisSession) {
+      _hasMarkedReadThisSession = true;
       TaskStore.instance.markAllNotificationsRead();
+    }
+    // Reset the flag when the sheet collapses back to peek so that NEW
+    // notifications that arrive while the sheet is closed will show the
+    // red dot again and get marked read on the next open.
+    if (_sheetController.size <= _snapPeek) {
+      _hasMarkedReadThisSession = false;
     }
   }
 
@@ -282,16 +292,17 @@ class _NotificationSheetState extends State<_NotificationSheet> {
         list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
         break;
       case _SortBy.type:
-        // overdue → due today → reminder → completed
-        int _rank(NotificationType t) {
+        int rank(NotificationType t) {
           switch (t) {
             case NotificationType.taskOverdue:   return 0;
             case NotificationType.taskDueToday:  return 1;
             case NotificationType.taskReminder:  return 2;
             case NotificationType.taskCompleted: return 3;
+            case NotificationType.eventToday:    return 4;
+            case NotificationType.eventReminder: return 5;
           }
         }
-        list.sort((a, b) => _rank(a.type).compareTo(_rank(b.type)));
+        list.sort((a, b) => rank(a.type).compareTo(rank(b.type)));
         break;
     }
     return list;
@@ -304,6 +315,9 @@ class _NotificationSheetState extends State<_NotificationSheet> {
       case _SortBy.type:   return 'Type';
     }
   }
+
+  int get _unreadCount =>
+      widget.notifications.where((n) => !n.isRead).length;
 
   void _showSortSheet() {
     showModalBottomSheet(
@@ -331,6 +345,7 @@ class _NotificationSheetState extends State<_NotificationSheet> {
   Widget build(BuildContext context) {
     final notifications = widget.notifications;
     final sorted = _sorted;
+    final unread = _unreadCount;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -353,17 +368,41 @@ class _NotificationSheetState extends State<_NotificationSheet> {
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(
             children: [
-              const Text(
-                'Notifications',
-                style: TextStyle(
-                  color: kNavyDark,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
+              // Title + unread badge
+              Row(
+                children: [
+                  const Text(
+                    'Notifications',
+                    style: TextStyle(
+                      color: kNavyDark,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  if (unread > 0) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE87070),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '$unread',
+                        style: const TextStyle(
+                          color: kWhite,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
               const Spacer(),
               if (notifications.isNotEmpty) ...[
-                // Sorted by button
+                // Sort button
                 GestureDetector(
                   onTap: _showSortSheet,
                   child: Row(
@@ -407,6 +446,31 @@ class _NotificationSheetState extends State<_NotificationSheet> {
           ),
         ),
 
+        // "Mark all read" sub-row — only shown when there are unread items
+        if (unread > 0 && notifications.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+            child: GestureDetector(
+              onTap: () => TaskStore.instance.markAllNotificationsRead(),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.done_all_rounded,
+                      size: 15, color: Color(0xFF9B88E8)),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Mark all as read',
+                    style: const TextStyle(
+                      color: Color(0xFF9B88E8),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
         const SizedBox(height: 20),
 
         if (notifications.isEmpty) ...[
@@ -445,16 +509,34 @@ class _NotificationSheetState extends State<_NotificationSheet> {
             child: Column(
               children: [
                 for (int i = 0; i < sorted.length; i++)
-                  NotificationItem(
-                    icon: sorted[i].icon,
-                    iconBgColor: sorted[i].iconBgColor,
-                    iconColor: sorted[i].iconColor,
-                    subtitle: sorted[i].subtitle,
-                    title: sorted[i].title,
-                    detail: sorted[i].detail,
-                    showDashedLine: i < sorted.length - 1,
-                    priority: sorted[i].priority,
-                    isRead: sorted[i].isRead,
+                  // Swipe left to dismiss individual notification
+                  Dismissible(
+                    key: ValueKey(sorted[i].id),
+                    direction: DismissDirection.endToStart,
+                    onDismissed: (_) =>
+                        TaskStore.instance.deleteNotification(sorted[i].id),
+                    background: Container(
+                      alignment: Alignment.centerRight,
+                      padding: const EdgeInsets.only(right: 16),
+                      margin: const EdgeInsets.only(bottom: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFECEC),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.delete_outline_rounded,
+                          color: Color(0xFFE87070), size: 22),
+                    ),
+                    child: NotificationItem(
+                      icon: sorted[i].icon,
+                      iconBgColor: sorted[i].iconBgColor,
+                      iconColor: sorted[i].iconColor,
+                      subtitle: sorted[i].subtitle,
+                      title: sorted[i].title,
+                      detail: sorted[i].detail,
+                      showDashedLine: i < sorted.length - 1,
+                      priority: sorted[i].priority,
+                      isRead: sorted[i].isRead,
+                    ),
                   ),
               ],
             ),
@@ -670,8 +752,8 @@ class _ClearConfirmSheet extends StatelessWidget {
           ),
           Container(
             width: 56, height: 56,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFECEC),
+            decoration: const BoxDecoration(
+              color: Color(0xFFFFECEC),
               shape: BoxShape.circle,
             ),
             child: const Icon(Icons.delete_sweep_rounded,

@@ -34,14 +34,12 @@ class _CreateTaskSheetState extends State<_CreateTaskSheet>
   final _notesCtrl = TextEditingController();
   final _nameFocus = FocusNode();
 
-  TaskCategory _category  = TaskCategory.assignment;
-  TaskPriority _priority  = TaskPriority.medium;
-  TaskRepeat   _repeat    = TaskRepeat.once;
-  TaskStatus   _status    = TaskStatus.notStarted;
-  DateTime     _startDate = DateTime.now();
-  DateTime?    _endDate;
-  TimeOfDay?   _startTime;
-  TimeOfDay?   _endTime;
+  TaskCategory _category     = TaskCategory.assignment;
+  TaskPriority _priority     = TaskPriority.medium;
+  TaskRepeat   _repeat       = TaskRepeat.once;
+
+  DateTime     _deadlineDate = DateTime.now();
+  TimeOfDay?   _deadlineTime;
   bool         _showOptional = false;
   bool         _saving = false;
 
@@ -81,14 +79,14 @@ class _CreateTaskSheetState extends State<_CreateTaskSheet>
       id:        DateTime.now().millisecondsSinceEpoch.toString(),
       name:      _nameCtrl.text.trim(),
       category:  _category,
-      dueDate:   _startDate,
-      endDate:   _endDate,
-      dueTime:   _startTime,
-      endTime:   _endTime,
+      dueDate:   _deadlineDate,
+      endDate:   null,
+      dueTime:   _deadlineTime,
+      endTime:   null,
       priority:  _priority,
       notes:     _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
       repeat:    _repeat,
-      status:    _status,
+      status:    TaskStatus.notStarted,
     );
 
     TaskStore.instance.addTask(task);
@@ -98,29 +96,13 @@ class _CreateTaskSheetState extends State<_CreateTaskSheet>
 
   // ── Date/time pickers ──────────────────────────────────────
 
-  Future<void> _pickStartDate() async {
+  Future<void> _pickDeadlineDate() async {
     final picked = await _showIosDatePicker(
       context,
-      initial: _startDate,
+      initial: _deadlineDate,
       firstDate: DateTime.now().subtract(const Duration(days: 1)),
     );
-    if (picked != null) {
-      setState(() {
-        _startDate = picked;
-        if (_endDate != null && _endDate!.isBefore(picked)) {
-          _endDate = picked;
-        }
-      });
-    }
-  }
-
-  Future<void> _pickEndDate() async {
-    final picked = await _showIosDatePicker(
-      context,
-      initial: _endDate ?? _startDate,
-      firstDate: _startDate,
-    );
-    if (picked != null) setState(() => _endDate = picked);
+    if (picked != null) setState(() => _deadlineDate = picked);
   }
 
   Future<DateTime?> _showIosDatePicker(BuildContext ctx, {required DateTime initial, DateTime? firstDate}) {
@@ -136,17 +118,9 @@ class _CreateTaskSheetState extends State<_CreateTaskSheet>
     );
   }
 
-  Future<void> _pickStartTime() async {
-    final picked = await _showIosTimePicker(context, initial: _startTime ?? TimeOfDay.now());
-    if (picked != null) setState(() => _startTime = picked);
-  }
-
-  Future<void> _pickEndTime() async {
-    final picked = await _showIosTimePicker(context,
-        initial: _endTime ?? (_startTime != null
-            ? TimeOfDay(hour: (_startTime!.hour + 1) % 24, minute: _startTime!.minute)
-            : TimeOfDay.now()));
-    if (picked != null) setState(() => _endTime = picked);
+  Future<void> _pickDeadlineTime() async {
+    final picked = await _showIosTimePicker(context, initial: _deadlineTime ?? TimeOfDay.now());
+    if (picked != null) setState(() => _deadlineTime = picked);
   }
 
   Future<TimeOfDay?> _showIosTimePicker(BuildContext ctx, {required TimeOfDay initial}) {
@@ -274,22 +248,17 @@ class _CreateTaskSheetState extends State<_CreateTaskSheet>
 
                     const SizedBox(height: 18),
 
-                    // ── Date & Time ───────────────────────────────
-                    _FieldLabel(label: 'Date & Time', icon: Icons.schedule_rounded),
+                    // ── Deadline ──────────────────────────────────
+                    _FieldLabel(label: 'Deadline', icon: Icons.schedule_rounded),
                     const SizedBox(height: 10),
-                    _DateTimeSection(
-                      startDate:     _startDate,
-                      endDate:       _endDate,
-                      startTime:     _startTime,
-                      endTime:       _endTime,
-                      fmtDate:       _fmtDate,
-                      fmtTime:       _fmtTime,
-                      onPickStartDate: _pickStartDate,
-                      onPickEndDate:   _pickEndDate,
-                      onPickStartTime: _pickStartTime,
-                      onPickEndTime:   _pickEndTime,
-                      onClearEndDate:  () => setState(() => _endDate = null),
-                      onClearTime:     () => setState(() { _startTime = null; _endTime = null; }),
+                    _DeadlineSection(
+                      deadlineDate:    _deadlineDate,
+                      deadlineTime:    _deadlineTime,
+                      fmtDate:         _fmtDate,
+                      fmtTime:         _fmtTime,
+                      onPickDate:      _pickDeadlineDate,
+                      onPickTime:      _pickDeadlineTime,
+                      onClearTime:     () => setState(() => _deadlineTime = null),
                     ),
 
                     const SizedBox(height: 18),
@@ -299,7 +268,10 @@ class _CreateTaskSheetState extends State<_CreateTaskSheet>
                     const SizedBox(height: 8),
                     _PriorityChips(value: _priority, onChanged: (v) => setState(() => _priority = v)),
 
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 10),
+                    _PriorityHintCard(priority: _priority, deadline: _deadlineDate),
+
+                    const SizedBox(height: 12),
 
                     // ── Optional toggle ───────────────────────────
                     GestureDetector(
@@ -331,9 +303,7 @@ class _CreateTaskSheetState extends State<_CreateTaskSheet>
                       secondChild: _OptionalSection(
                         notesCtrl: _notesCtrl,
                         repeat: _repeat,
-                        status: _status,
                         onRepeatChanged: (v) => setState(() => _repeat = v),
-                        onStatusChanged: (v) => setState(() => _status = v),
                       ),
                       crossFadeState: _showOptional
                           ? CrossFadeState.showSecond
@@ -390,38 +360,245 @@ class _CreateTaskSheetState extends State<_CreateTaskSheet>
 }
 
 // ─────────────────────────────────────────────────────────────
-// Date & Time Section — redesigned with start/end
+// Smart Priority Hint Card
 // ─────────────────────────────────────────────────────────────
-class _DateTimeSection extends StatelessWidget {
-  final DateTime startDate;
-  final DateTime? endDate;
-  final TimeOfDay? startTime;
-  final TimeOfDay? endTime;
+class _PriorityHintCard extends StatelessWidget {
+  final TaskPriority priority;
+  final DateTime deadline;
+
+  const _PriorityHintCard({required this.priority, required this.deadline});
+
+  int get _daysUntilDeadline {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final due = DateTime(deadline.year, deadline.month, deadline.day);
+    return due.difference(today).inDays;
+  }
+
+  _HintData _getHint() {
+    final days = _daysUntilDeadline;
+
+    switch (priority) {
+      case TaskPriority.high:
+        if (days < 0) {
+          return _HintData(
+            icon: Icons.warning_amber_rounded,
+            urgency: 'Overdue!',
+            message: 'This deadline has already passed. Update your deadline or start immediately.',
+            accent: const Color(0xFFE87070),
+            notifNote: 'You\'ll get reminders 3 days, 1 day, and on the due date.',
+          );
+        } else if (days <= 2) {
+          return _HintData(
+            icon: Icons.local_fire_department_rounded,
+            urgency: 'Start today!',
+            message: 'High-priority tasks need full focus — you have very little time left.',
+            accent: const Color(0xFFE87070),
+            notifNote: 'You\'ll be reminded tomorrow and on the due date.',
+          );
+        } else if (days <= 6) {
+          return _HintData(
+            icon: Icons.bolt_rounded,
+            urgency: 'Act soon.',
+            message: 'Start within the next 1–2 days and break it into smaller steps.',
+            accent: const Color(0xFFE8A870),
+            notifNote: 'You\'ll get reminders 3 days and 1 day before the deadline.',
+          );
+        } else {
+          return _HintData(
+            icon: Icons.tips_and_updates_rounded,
+            urgency: 'Plan ahead.',
+            message: 'Great! You have time. Aim to start at least a week before the deadline.',
+            accent: const Color(0xFF9B88E8),
+            notifNote: 'You\'ll get reminders 7 days, 3 days, and 1 day before.',
+          );
+        }
+
+      case TaskPriority.medium:
+        if (days < 0) {
+          return _HintData(
+            icon: Icons.warning_amber_rounded,
+            urgency: 'Overdue!',
+            message: 'This deadline has already passed. Consider updating it.',
+            accent: const Color(0xFFE87070),
+            notifNote: 'You\'ll get a reminder on the due date.',
+          );
+        } else if (days <= 3) {
+          return _HintData(
+            icon: Icons.hourglass_bottom_rounded,
+            urgency: 'Don\'t wait.',
+            message: 'Time is getting short — start today to avoid last-minute stress.',
+            accent: const Color(0xFFE8D870),
+            notifNote: 'You\'ll be reminded 1 day before and on the due date.',
+          );
+        } else {
+          return _HintData(
+            icon: Icons.event_available_rounded,
+            urgency: 'On track.',
+            message: 'A few focused sessions should do it. Schedule a time to start.',
+            accent: const Color(0xFFE8D870),
+            notifNote: 'You\'ll get reminders 3 days and 1 day before the deadline.',
+          );
+        }
+
+      case TaskPriority.low:
+        if (days < 0) {
+          return _HintData(
+            icon: Icons.info_outline_rounded,
+            urgency: 'Overdue.',
+            message: 'This low-priority task has passed its deadline. Update or remove it.',
+            accent: const Color(0xFF3BBFA3),
+            notifNote: 'You\'ll get a reminder on the due date.',
+          );
+        } else {
+          return _HintData(
+            icon: Icons.self_improvement_rounded,
+            urgency: 'No rush.',
+            message: 'Squeeze this in during free moments. Don\'t let it pile up though!',
+            accent: const Color(0xFF3BBFA3),
+            notifNote: 'You\'ll get a reminder 1 day before the deadline.',
+          );
+        }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hint = _getHint();
+    final days = _daysUntilDeadline;
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 280),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      transitionBuilder: (child, anim) => FadeTransition(
+        opacity: anim,
+        child: SlideTransition(
+          position: Tween<Offset>(begin: const Offset(0, -0.08), end: Offset.zero).animate(anim),
+          child: child,
+        ),
+      ),
+      child: Container(
+        key: ValueKey('${priority.name}_${days.clamp(-999, 99)}'),
+        padding: const EdgeInsets.fromLTRB(13, 11, 13, 11),
+        decoration: BoxDecoration(
+          color: hint.accent.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: hint.accent.withOpacity(0.25)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(hint.icon, color: hint.accent, size: 15),
+                const SizedBox(width: 6),
+                Text(
+                  hint.urgency,
+                  style: TextStyle(
+                    color: hint.accent,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+                const Spacer(),
+                // Deadline badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: hint.accent.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    days < 0
+                        ? '${days.abs()}d overdue'
+                        : days == 0
+                            ? 'Due today'
+                            : '$days days left',
+                    style: TextStyle(
+                      color: hint.accent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            Text(
+              hint.message,
+              style: TextStyle(
+                color: kWhite.withOpacity(0.65),
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Divider(height: 1, color: hint.accent.withOpacity(0.15)),
+            const SizedBox(height: 7),
+            Row(
+              children: [
+                Icon(Icons.notifications_outlined, color: hint.accent.withOpacity(0.55), size: 11),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    hint.notifNote,
+                    style: TextStyle(
+                      color: kWhite.withOpacity(0.35),
+                      fontSize: 10,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HintData {
+  final IconData icon;
+  final String urgency;
+  final String message;
+  final Color accent;
+  final String notifNote;
+
+  const _HintData({
+    required this.icon,
+    required this.urgency,
+    required this.message,
+    required this.accent,
+    required this.notifNote,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Deadline Section — single deadline date + optional time
+// ─────────────────────────────────────────────────────────────
+class _DeadlineSection extends StatelessWidget {
+  final DateTime deadlineDate;
+  final TimeOfDay? deadlineTime;
   final String Function(DateTime) fmtDate;
   final String Function(TimeOfDay) fmtTime;
-  final VoidCallback onPickStartDate;
-  final VoidCallback onPickEndDate;
-  final VoidCallback onPickStartTime;
-  final VoidCallback onPickEndTime;
-  final VoidCallback onClearEndDate;
+  final VoidCallback onPickDate;
+  final VoidCallback onPickTime;
   final VoidCallback onClearTime;
 
-  const _DateTimeSection({
-    required this.startDate,
-    required this.endDate,
-    required this.startTime,
-    required this.endTime,
+  const _DeadlineSection({
+    required this.deadlineDate,
+    required this.deadlineTime,
     required this.fmtDate,
     required this.fmtTime,
-    required this.onPickStartDate,
-    required this.onPickEndDate,
-    required this.onPickStartTime,
-    required this.onPickEndTime,
-    required this.onClearEndDate,
+    required this.onPickDate,
+    required this.onPickTime,
     required this.onClearTime,
   });
 
-  bool get _hasTime => startTime != null;
+  bool get _hasTime => deadlineTime != null;
 
   @override
   Widget build(BuildContext context) {
@@ -433,83 +610,25 @@ class _DateTimeSection extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // ── DATE ROW ──────────────────────────────────────
+          // ── DEADLINE DATE ROW ─────────────────────────────
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
             child: Row(
               children: [
-                Icon(Icons.calendar_today_rounded, color: kTeal, size: 14),
+                Icon(Icons.event_rounded, color: kTeal, size: 14),
                 const SizedBox(width: 7),
-                Text('Date', style: TextStyle(color: kWhite.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
-                const Spacer(),
-                if (endDate != null)
-                  GestureDetector(
-                    onTap: onClearEndDate,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: kWhite.withOpacity(0.06),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(Icons.close_rounded, size: 11, color: kWhite.withOpacity(0.35)),
-                        const SizedBox(width: 3),
-                        Text('Single day', style: TextStyle(color: kWhite.withOpacity(0.35), fontSize: 10, fontWeight: FontWeight.w600)),
-                      ]),
-                    ),
-                  ),
+                Text('Due Date', style: TextStyle(color: kWhite.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
               ],
             ),
           ),
-          const SizedBox(height: 8),
 
           Padding(
             padding: const EdgeInsets.fromLTRB(10, 0, 10, 0),
-            child: Row(
-              children: [
-                // Start date
-                Expanded(
-                  child: _DateChip(
-                    label: 'Start',
-                    value: fmtDate(startDate),
-                    onTap: onPickStartDate,
-                    accent: kTeal,
-                  ),
-                ),
-                // Arrow or add-end-date
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: endDate != null
-                      ? Icon(Icons.arrow_forward_rounded, color: kWhite.withOpacity(0.25), size: 16)
-                      : GestureDetector(
-                          onTap: onPickEndDate,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: kTeal.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: kTeal.withOpacity(0.25)),
-                            ),
-                            child: Row(mainAxisSize: MainAxisSize.min, children: [
-                              Icon(Icons.add_rounded, size: 12, color: kTeal.withOpacity(0.7)),
-                              const SizedBox(width: 3),
-                              Text('End', style: TextStyle(color: kTeal.withOpacity(0.7), fontSize: 10, fontWeight: FontWeight.w700)),
-                            ]),
-                          ),
-                        ),
-                ),
-                // End date (if set)
-                Expanded(
-                  child: endDate != null
-                      ? _DateChip(
-                          label: 'End',
-                          value: fmtDate(endDate!),
-                          onTap: onPickEndDate,
-                          accent: const Color(0xFF9B88E8),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-              ],
+            child: _DateChip(
+              label: 'Deadline',
+              value: fmtDate(deadlineDate),
+              onTap: onPickDate,
+              accent: kTeal,
             ),
           ),
 
@@ -519,16 +638,18 @@ class _DateTimeSection extends StatelessWidget {
             child: Divider(height: 1, color: kWhite.withOpacity(0.07)),
           ),
 
-          // ── TIME ROW ─────────────────────────────────────
+          // ── TIME ROW (optional) ───────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
             child: Row(
               children: [
                 Icon(Icons.access_time_rounded, color: const Color(0xFF9B88E8), size: 14),
                 const SizedBox(width: 7),
-                Text('Time', style: TextStyle(color: kWhite.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
+                Text('Deadline Time', style: TextStyle(color: kWhite.withOpacity(0.45), fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.4)),
                 const Spacer(),
-                if (_hasTime)
+                Text('optional', style: TextStyle(color: kWhite.withOpacity(0.25), fontSize: 10, fontStyle: FontStyle.italic)),
+                if (_hasTime) ...[ 
+                  const SizedBox(width: 8),
                   GestureDetector(
                     onTap: onClearTime,
                     child: Container(
@@ -544,6 +665,7 @@ class _DateTimeSection extends StatelessWidget {
                       ]),
                     ),
                   ),
+                ],
               ],
             ),
           ),
@@ -551,42 +673,15 @@ class _DateTimeSection extends StatelessWidget {
 
           Padding(
             padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
-            child: Row(
-              children: [
-                // Start time
-                Expanded(
-                  child: _hasTime
-                      ? _DateChip(
-                          label: 'Start',
-                          value: fmtTime(startTime!),
-                          onTap: onPickStartTime,
-                          accent: const Color(0xFF9B88E8),
-                          icon: Icons.access_time_rounded,
-                        )
-                      : _AddTimeChip(label: 'Add start time', onTap: onPickStartTime),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: _hasTime
-                      ? Icon(Icons.arrow_forward_rounded, color: kWhite.withOpacity(0.25), size: 16)
-                      : const SizedBox(width: 16),
-                ),
-                // End time
-                Expanded(
-                  child: _hasTime
-                      ? (endTime != null
-                          ? _DateChip(
-                              label: 'End',
-                              value: fmtTime(endTime!),
-                              onTap: onPickEndTime,
-                              accent: kTeal,
-                              icon: Icons.access_time_rounded,
-                            )
-                          : _AddTimeChip(label: 'Add end time', onTap: onPickEndTime))
-                      : const SizedBox.shrink(),
-                ),
-              ],
-            ),
+            child: _hasTime
+                ? _DateChip(
+                    label: 'Time',
+                    value: fmtTime(deadlineTime!),
+                    onTap: onPickTime,
+                    accent: const Color(0xFF9B88E8),
+                    icon: Icons.access_time_rounded,
+                  )
+                : _AddTimeChip(label: 'Add deadline time (optional)', onTap: onPickTime),
           ),
         ],
       ),
@@ -970,13 +1065,11 @@ class _PriorityChips extends StatelessWidget {
 class _OptionalSection extends StatelessWidget {
   final TextEditingController notesCtrl;
   final TaskRepeat repeat;
-  final TaskStatus status;
   final ValueChanged<TaskRepeat> onRepeatChanged;
-  final ValueChanged<TaskStatus> onStatusChanged;
 
   const _OptionalSection({
-    required this.notesCtrl, required this.repeat, required this.status,
-    required this.onRepeatChanged, required this.onStatusChanged,
+    required this.notesCtrl, required this.repeat,
+    required this.onRepeatChanged,
   });
 
   @override
@@ -984,12 +1077,6 @@ class _OptionalSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 18),
-
-        _FieldLabel(label: 'Initial Status', icon: Icons.swap_horiz_rounded),
-        const SizedBox(height: 8),
-        _StatusChips(value: status, onChanged: onStatusChanged),
-
         const SizedBox(height: 18),
 
         _FieldLabel(label: 'Repeat', icon: Icons.repeat_rounded),
@@ -1485,9 +1572,11 @@ class _IosDatePickerSheetState extends State<_IosDatePickerSheet> {
     _firstYear = widget.firstDate.year;
     _lastYear  = widget.lastDate.year;
 
-    // Large offset for month/day so users can spin freely; year is exact
+    // Large offset for month/day so users can spin freely; year is exact.
+    // Offsets MUST be exact multiples of the cycle length so the initial
+    // displayed value matches the date (1200 % 12 == 0; 3007 % 31 == 0).
     _monthCtrl = FixedExtentScrollController(initialItem: 1200 + (_month - 1));
-    _dayCtrl   = FixedExtentScrollController(initialItem: 3000 + (_day - 1));
+    _dayCtrl   = FixedExtentScrollController(initialItem: 3007 + (_day - 1));
     _yearCtrl  = FixedExtentScrollController(initialItem: _year - _firstYear);
   }
 
