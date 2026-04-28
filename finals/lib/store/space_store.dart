@@ -6,7 +6,7 @@ class SpaceStore extends ChangeNotifier {
 
   static final SpaceStore instance = SpaceStore._();
 
-  final List<Space> _spaces = [];
+final List<Space> _spaces = [];
 
   List<Space> get spaces => _spaces;
 

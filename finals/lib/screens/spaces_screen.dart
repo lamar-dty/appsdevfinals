@@ -194,11 +194,52 @@ SpaceStore.instance.removeSpace(space);      if (_selectedSpace == space) _selec
   }
 
   void _onJoinSpace() {
-    showJoinSpaceDialog(
-      context,
-      isAlreadyJoined: (code) => _spaces.any((s) => s.inviteCode == code),
-    );
-  }
+  showJoinSpaceDialog(
+    context,
+    isAlreadyJoined: (code) => _spaces.any((s) => s.inviteCode == code),
+    onJoin: (code) {
+      if (code == '00000000') {
+        setState(() {
+          SpaceStore.instance.addSpace(
+            Space(
+              name: 'Final Thesis',
+              description: 'Shared workspace for the team.',
+              dateRange: '04/29/2026 - 05/29/2026',
+              dueDate: '05/29/2026',
+              members: [
+                'Alex (Creator)',
+                'John',
+                'Mika',
+              ],
+              isCreator: false,
+              status: 'Not Started',
+              statusColor: const Color(0xFFB0BAD3),
+              accentColor: const Color(0xFF6C63FF),
+              progress: 0,
+              completedTasks: 0,
+tasks: [
+  SpaceTask(
+    title: 'Research Chapter 1',
+    description: 'Finish the introduction and background study.',
+    status: 'In Progress',
+    statusColor: const Color(0xFF4A90D9),
+    assignedTo: ['Alex (Creator)', 'Mika'],
+  ),
+  SpaceTask(
+    title: 'Prepare Presentation Slides',
+    description: 'Create the defense presentation deck.',
+    status: 'Not Started',
+    statusColor: const Color(0xFFB0BAD3),
+    assignedTo: ['John'],
+  ),
+],              inviteCode: '00000000',
+            ),
+          );
+        });
+      }
+    },
+  );
+}
 
   void _onAddSpace() {
     showCreateSpaceSheet(context, onSaved: (result) {

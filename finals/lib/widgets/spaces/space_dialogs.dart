@@ -530,6 +530,7 @@ void showConfirmKickMember(
 void showJoinSpaceDialog(
   BuildContext context, {
   required bool Function(String code) isAlreadyJoined,
+  required void Function(String code) onJoin,
 }) {
   final ctrl = TextEditingController();
   String? error;
@@ -654,8 +655,13 @@ void showJoinSpaceDialog(
                         setDlg(() => error = "You're already in this space");
                         return;
                       }
-                      setDlg(() => error = 'Space not found');
-                    },
+if (code == '00000000') {
+  onJoin(code);
+  Navigator.pop(ctx);
+  return;
+}
+
+setDlg(() => error = 'Space not found');                    },
                     child: const Text('Join',
                         style: TextStyle(fontWeight: FontWeight.bold)),
                   ),

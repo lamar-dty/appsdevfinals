@@ -540,17 +540,24 @@ class _SelectedBackgroundState extends State<SelectedBackground> {
           const SizedBox(height: 10),
 
           Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              MemberChip(name: 'You (Creator)', canKick: false, onKick: null),
-              ...space.members.map((m) => MemberChip(
-                    name: m,
-                    canKick: space.isCreator,
-                    onKick: space.isCreator ? () => widget.onKickMember(m) : null,
-                  )),
-            ],
-          ),
+  spacing: 8,
+  runSpacing: 6,
+  children: [
+    MemberChip(
+      name: space.isCreator ? 'You (Creator)' : 'You',
+      canKick: false,
+      onKick: null,
+    ),
+    ...space.members.map(
+      (m) => MemberChip(
+        name: m,
+        canKick: space.isCreator,
+        onKick:
+            space.isCreator ? () => widget.onKickMember(m) : null,
+      ),
+    ),
+  ],
+),
 
           const SizedBox(height: 24),
 
@@ -563,19 +570,23 @@ class _SelectedBackgroundState extends State<SelectedBackground> {
                       color: kWhite,
                       fontSize: 16,
                       fontWeight: FontWeight.bold)),
-              GestureDetector(
-                onTap: widget.onAddTask,
-                child: Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: kWhite.withOpacity(0.15),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.add_rounded,
-                      color: kWhite, size: 18),
-                ),
-              ),
+             if (space.isCreator)
+  GestureDetector(
+    onTap: widget.onAddTask,
+    child: Container(
+      width: 28,
+      height: 28,
+      decoration: BoxDecoration(
+        color: kWhite.withOpacity(0.15),
+        shape: BoxShape.circle,
+      ),
+      child: const Icon(
+        Icons.add_rounded,
+        color: kWhite,
+        size: 18,
+      ),
+    ),
+  ),
             ],
           ),
 
@@ -583,8 +594,9 @@ class _SelectedBackgroundState extends State<SelectedBackground> {
 
           // Task list or empty state
           if (space.tasks.isEmpty)
-            GestureDetector(
-              onTap: widget.onAddTask,
+  GestureDetector(
+    onTap: space.isCreator ? widget.onAddTask : null,
+
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 20),
                 child: Center(
@@ -935,7 +947,7 @@ class _InviteCodeRowState extends State<InviteCodeRow> {
   @override
   Widget build(BuildContext context) {
     final code = widget.space.inviteCode;
-    final display = '${code.substring(0, 4)} ${code.substring(4)}';
+    final display = code;
     final accent = widget.space.accentColor;
 
     return Container(
@@ -1126,8 +1138,9 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                                 )
                               else
                                 GestureDetector(
-                                  onTap: () =>
-                                      setState(() => _isEditingTitle = true),
+  onTap: widget.space.isCreator
+      ? () => setState(() => _isEditingTitle = true)
+      : null,
                                   child: Row(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.center,
@@ -1142,12 +1155,14 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                                           ),
                                         ),
                                       ),
-                                      const SizedBox(width: 6),
-                                      Icon(
-                                        Icons.edit_rounded,
-                                        color: kWhite.withOpacity(0.3),
-                                        size: 14,
-                                      ),
+                                      if (widget.space.isCreator) ...[
+  const SizedBox(width: 6),
+  Icon(
+    Icons.edit_rounded,
+    color: kWhite.withOpacity(0.3),
+    size: 14,
+  ),
+],
                                     ],
                                   ),
                                 ),
@@ -1220,10 +1235,12 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                         const SizedBox(width: 12),
                         // Status badge: status icon + text + swap icon
                         GestureDetector(
-                          onTap: () {
-                            widget.onCycleStatus();
-                            setState(() {});
-                          },
+  onTap: widget.space.isCreator
+      ? () {
+          widget.onCycleStatus();
+          setState(() {});
+        }
+      : null,
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 200),
                             padding: const EdgeInsets.symmetric(
@@ -1273,8 +1290,7 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const _SectionLabel(label: 'Notes'),
-                        if (!_isEditingNotes)
-                          GestureDetector(
+if (!_isEditingNotes && widget.space.isCreator)                          GestureDetector(
                             onTap: () => setState(() => _isEditingNotes = true),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
@@ -1302,8 +1318,7 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                               ),
                             ),
                           )
-                        else
-                          Row(
+else if (widget.space.isCreator)                          Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               GestureDetector(
@@ -1412,10 +1427,12 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                       children: [
                         // Unassigned chip to clear
                         GestureDetector(
-                          onTap: () {
-                            widget.onAssign([]);
-                            setState(() {});
-                          },
+                          onTap: widget.space.isCreator
+    ? () {
+        widget.onAssign([]);
+        setState(() {});
+      }
+    : null,
                           child: Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 5),
@@ -1441,19 +1458,22 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                           ),
                         ),
                         // Member chips
-                        ...['You (Creator)', ...widget.space.members]
-                            .map((m) {
+...[widget.space.isCreator ? 'You (Creator)' : 'You', ...widget.space.members]                            .map((m) {
                           final isSelected = task.assignedTo.contains(m);
                           return GestureDetector(
-                            onTap: () {
-                              final updated =
-                                  List<String>.from(task.assignedTo);
-                              isSelected
-                                  ? updated.remove(m)
-                                  : updated.add(m);
-                              widget.onAssign(updated);
-                              setState(() {});
-                            },
+                            onTap: widget.space.isCreator
+    ? () {
+        final updated =
+            List<String>.from(task.assignedTo);
+
+        isSelected
+            ? updated.remove(m)
+            : updated.add(m);
+
+        widget.onAssign(updated);
+        setState(() {});
+      }
+    : null,
                             child: Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 10, vertical: 5),
@@ -1506,8 +1526,9 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const _SectionLabel(label: 'Attachments'),
-                        GestureDetector(
-                          onTap: () => _pickAttachment(),
+                        if (widget.space.isCreator)
+  GestureDetector(
+    onTap: () => _pickAttachment(),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 12, vertical: 5),
@@ -1597,9 +1618,10 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
             ),
 
             // ── 8. Delete button: pinned at bottom ──
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-              child: GestureDetector(
+            if (widget.space.isCreator)
+  Padding(
+    padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+    child: GestureDetector(
                 onTap: widget.onDelete,
                 child: Container(
                   width: double.infinity,
