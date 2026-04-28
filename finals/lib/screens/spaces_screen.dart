@@ -189,8 +189,13 @@ SpaceStore.instance.removeSpace(space);      if (_selectedSpace == space) _selec
       context,
       space,
       member,
-      onConfirm: () => setState(() => space.members.remove(member)),
-    );
+onConfirm: () => setState(() {
+  space.members.remove(member);
+
+  for (final task in space.tasks) {
+    task.assignedTo.remove(member);
+  }
+}),    );
   }
 
   void _onJoinSpace() {
