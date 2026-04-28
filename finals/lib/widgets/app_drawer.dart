@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../constants/colors.dart';
 import '../screens/login_screen.dart';
+import '../store/auth_store.dart';
 
 class AppDrawer extends StatefulWidget {
   const AppDrawer({super.key});
@@ -143,19 +144,19 @@ class _AppDrawerState extends State<AppDrawer>
                       const SizedBox(width: 14),
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
-                          Text('User Nickname',
-                              style: TextStyle(
+                        children: [
+                          Text(AuthStore.instance.displayName,
+                              style: const TextStyle(
                                   color: kWhite,
                                   fontSize: 20,
                                   fontWeight: FontWeight.bold)),
-                          SizedBox(height: 2),
-                          Text('#userID123',
+                          const SizedBox(height: 2),
+                          Text(AuthStore.instance.userTag,
                               style:
-                                  TextStyle(color: kWhite, fontSize: 12)),
-                          Text('useremail@gmail.com',
+                                  const TextStyle(color: kWhite, fontSize: 12)),
+                          Text(AuthStore.instance.displayEmail,
                               style:
-                                  TextStyle(color: kWhite, fontSize: 12)),
+                                  const TextStyle(color: kWhite, fontSize: 12)),
                         ],
                       ),
                     ],
@@ -202,12 +203,15 @@ class _AppDrawerState extends State<AppDrawer>
               child: SlideTransition(
                 position: _logoutSlide,
                 child: InkWell(
-                  onTap: () {
-                    Navigator.of(context).pushAndRemoveUntil(
-                      MaterialPageRoute(
-                          builder: (_) => const LoginScreen()),
-                      (route) => false,
-                    );
+                  onTap: () async {
+                    await AuthStore.instance.logout();
+                    if (context.mounted) {
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(
+                            builder: (_) => const LoginScreen()),
+                        (route) => false,
+                      );
+                    }
                   },
                   borderRadius: BorderRadius.circular(8),
                   child: Padding(

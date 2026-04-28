@@ -4,6 +4,7 @@ import '../store/task_store.dart';
 import '../models/app_notification.dart';
 import '../widgets/notification_item.dart';
 import '../store/space_store.dart';
+import '../store/auth_store.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -56,10 +57,9 @@ listenable: Listenable.merge([
                       padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
+                        children: [
                           Text(
-                            'Welcome back, User!',
-                            style: TextStyle(
+'Welcome back, ${AuthStore.instance.displayName}!',                            style: TextStyle(
                               color: kWhite,
                               fontSize: 26,
                               fontWeight: FontWeight.bold,
@@ -296,8 +296,9 @@ class _NotificationSheetState extends State<_NotificationSheet> {
             case NotificationType.spaceTaskAdded:     return 12;
             // Space - membership
             case NotificationType.spaceMemberRemoved: return 13;
-            case NotificationType.spaceJoined:        return 14;
-            case NotificationType.spaceCreated:       return 15;
+            case NotificationType.spaceMemberJoined:  return 14;
+            case NotificationType.spaceJoined:        return 15;
+            case NotificationType.spaceCreated:       return 16;
           }
         }
         list.sort((a, b) => rank(a.type).compareTo(rank(b.type)));

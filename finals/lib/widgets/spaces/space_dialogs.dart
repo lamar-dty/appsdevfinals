@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../constants/colors.dart';
 import '../../models/space.dart';
+import '../../models/app_notification.dart';
+import '../../store/space_store.dart';
+import '../../store/auth_store.dart';
+import '../../store/task_store.dart';
 import '../../widgets/spaces/space_detail_sheet.dart'; // for InviteCodeRow
 
 // ─────────────────────────────────────────────────────────────
@@ -53,18 +57,34 @@ void showAddMemberDialog(
                   fontWeight: FontWeight.w700,
                 ),
               ),
+              const SizedBox(height: 4),
+              Text(
+                'Ask the user to share their #ID from the drawer.',
+                style: TextStyle(
+                  color: kWhite.withOpacity(0.3),
+                  fontSize: 11,
+                ),
+              ),
 
               const SizedBox(height: 6),
 
               TextField(
                 controller: ctrl,
                 autofocus: true,
+                maxLength: 9, // # + 8 hex chars
+                inputFormatters: [
+                  // Allow only # prefix + hex characters
+                  FilteringTextInputFormatter.allow(RegExp(r'[#0-9a-fA-F]')),
+                ],
                 style: const TextStyle(
                   color: kWhite,
                   fontSize: 14,
+                  letterSpacing: 1.5,
+                  fontWeight: FontWeight.w600,
                 ),
                 decoration: InputDecoration(
-                  hintText: '#UserID123',
+                  hintText: '#a1b2c3d4',
+                  counterText: '',
                   hintStyle: TextStyle(
                     color: kWhite.withOpacity(0.25),
                   ),
@@ -168,25 +188,63 @@ void showAddMemberDialog(
                             BorderRadius.circular(12),
                       ),
                     ),
-                    onPressed: () {
+                    onPressed: () async {
                       final raw = ctrl.text.trim();
-
                       if (raw.isEmpty) {
-                      setDlg(() => error = 'Please enter a User ID');
-                      return;
+                        setDlg(() => error = 'Please enter a User ID');
+                        return;
                       }
 
-                      final cleaned =
-                      raw.startsWith('@') ? raw.substring(1) : raw;
+                      // Strip leading # then validate it's an 8-char hex ID.
+                      final cleaned = raw.startsWith('#') ? raw.substring(1) : raw;
+                      final validId = RegExp(r'^[0-9a-fA-F]{8}$').hasMatch(cleaned);
+                      if (!validId) {
+                        setDlg(() => error = 'Enter a valid User ID (e.g. #a1b2c3d4)');
+                        return;
+                      }
 
-                      if (space.members.contains(cleaned)) {
-                      setDlg(() => error = 'Already added');
-                      return;
+                      // Resolve the typed ID to a real display name.
+                      final resolvedName = AuthStore.instance.nameForId(cleaned);
+                      if (resolvedName == null) {
+                        setDlg(() => error = 'No user found with that ID');
+                        return;
+                      }
+
+                      // Don't add yourself or someone already in the space.
+                      if (resolvedName == AuthStore.instance.displayName) {
+                        setDlg(() => error = "That's you!");
+                        return;
+                      }
+                      if (space.members.contains(resolvedName)) {
+                        setDlg(() => error = 'Already a member');
+                        return;
                       }
 
                       Navigator.pop(ctx);
 
-                      space.members.add(cleaned);
+                      // Add the resolved display name to the member list.
+                      space.members.add(resolvedName);
+                      SpaceStore.instance.save();
+
+                      final invitedId = AuthStore.instance.userIdForName(resolvedName);
+                      if (invitedId != null) {
+                        // Push the space itself into the invitee's pending inbox
+                        // so it appears automatically when they open the app.
+                        await SpaceStore.instance.pushPendingInvite(invitedId, space);
+
+                        // Also push a notification so they know they were added.
+                        final notif = AppNotification(
+                          id: 'space_invite_${space.inviteCode}_$resolvedName',
+                          type: NotificationType.spaceMemberJoined,
+                          sourceId: space.inviteCode,
+                          spaceInviteCode: space.inviteCode,
+                          spaceAccentColor: space.accentColor,
+                          title: space.name,
+                          subtitle: 'You were added to a space 🎉',
+                          detail: '${AuthStore.instance.displayName} added you to "${space.name}".',
+                        );
+                        await TaskStore.instance.pushInviteNotification(invitedId, notif);
+                      }
 
                       onMemberAdded();
                     },
@@ -530,7 +588,7 @@ void showConfirmKickMember(
 void showJoinSpaceDialog(
   BuildContext context, {
   required bool Function(String code) isAlreadyJoined,
-  required void Function(String code) onJoin,
+  required Future<void> Function(String code) onJoin,
 }) {
   final ctrl = TextEditingController();
   String? error;
@@ -655,13 +713,9 @@ void showJoinSpaceDialog(
                         setDlg(() => error = "You're already in this space");
                         return;
                       }
-if (code == '00000000') {
-  onJoin(code);
-  Navigator.pop(ctx);
-  return;
-}
-
-setDlg(() => error = 'Space not found');                    },
+// Close dialog and let the caller handle lookup & error display.
+Navigator.pop(ctx);
+onJoin(code);                    },
                     child: const Text('Join',
                         style: TextStyle(fontWeight: FontWeight.bold)),
                   ),

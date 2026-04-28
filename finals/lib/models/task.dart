@@ -113,4 +113,51 @@ class Task {
           .isAtSameMomentAs(DateTime(dueDate.year, dueDate.month, dueDate.day));
 
   bool get hasTimeRange => dueTime != null && endTime != null;
+
+  // ── Serialisation ─────────────────────────────────────────
+
+  static TimeOfDay? _todFromMap(Map<String, dynamic>? m) =>
+      m == null ? null : TimeOfDay(hour: m['h'] as int, minute: m['m'] as int);
+
+  static Map<String, int>? _todToMap(TimeOfDay? t) =>
+      t == null ? null : {'h': t.hour, 'm': t.minute};
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'category': category.index,
+        'dueDate': dueDate.millisecondsSinceEpoch,
+        'endDate': endDate?.millisecondsSinceEpoch,
+        'dueTime': _todToMap(dueTime),
+        'endTime': _todToMap(endTime),
+        'priority': priority.index,
+        'spaceName': spaceName,
+        'notes': notes,
+        'repeat': repeat.index,
+        'status': status.index,
+        'createdAt': createdAt.millisecondsSinceEpoch,
+      };
+
+  factory Task.fromJson(Map<String, dynamic> j) => Task(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        category: TaskCategory.values[j['category'] as int],
+        dueDate: DateTime.fromMillisecondsSinceEpoch(j['dueDate'] as int),
+        endDate: j['endDate'] == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(j['endDate'] as int),
+        dueTime: _todFromMap(j['dueTime'] != null
+            ? Map<String, dynamic>.from(j['dueTime'] as Map)
+            : null),
+        endTime: _todFromMap(j['endTime'] != null
+            ? Map<String, dynamic>.from(j['endTime'] as Map)
+            : null),
+        priority: TaskPriority.values[j['priority'] as int],
+        spaceName: j['spaceName'] as String?,
+        notes: j['notes'] as String?,
+        repeat: TaskRepeat.values[j['repeat'] as int],
+        status: TaskStatus.values[j['status'] as int],
+        createdAt:
+            DateTime.fromMillisecondsSinceEpoch(j['createdAt'] as int),
+      );
 }

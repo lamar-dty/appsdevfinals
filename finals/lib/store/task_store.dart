@@ -1,20 +1,157 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/task.dart';
 import '../models/event.dart';
 import '../models/app_notification.dart';
 import '../models/space.dart';
+import 'auth_store.dart';
+
+// ─────────────────────────────────────────────────────────────
+// Storage keys — scoped per user via AuthStore.scopedKey()
+// ─────────────────────────────────────────────────────────────
+String get _kTasks         => AuthStore.instance.scopedKey('task_store_tasks');
+String get _kEvents        => AuthStore.instance.scopedKey('task_store_events');
+String get _kNotifications => AuthStore.instance.scopedKey('task_store_notifications');
+
+// Global shared inbox: userId -> List<AppNotification JSON>
+// Any user can push a notification here addressed to another user's ID.
+// Each user drains their own inbox on load/focus and moves it to their scoped store.
+String _sharedInboxKey(String userId) => 'shared_notifs_$userId';
 
 class TaskStore extends ChangeNotifier {
   TaskStore._();
   static final TaskStore instance = TaskStore._();
 
-  final List<Task> _tasks = [];
-  final List<Event> _events = [];
+  final List<Task>            _tasks         = [];
+  final List<Event>           _events        = [];
   final List<AppNotification> _notifications = [];
 
-  List<Task> get tasks => List.unmodifiable(_tasks);
-  List<Event> get events => List.unmodifiable(_events);
+  List<Task>            get tasks         => List.unmodifiable(_tasks);
+  List<Event>           get events        => List.unmodifiable(_events);
   List<AppNotification> get notifications => List.unmodifiable(_notifications);
+
+  // ── Initialisation ────────────────────────────────────────
+
+  /// Call once from main() after WidgetsFlutterBinding.ensureInitialized().
+  Future<void> load() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final rawTasks = prefs.getString(_kTasks);
+    if (rawTasks != null) {
+      final list = jsonDecode(rawTasks) as List;
+      _tasks.addAll(
+        list.map((e) => Task.fromJson(Map<String, dynamic>.from(e as Map))),
+      );
+    }
+
+    final rawEvents = prefs.getString(_kEvents);
+    if (rawEvents != null) {
+      final list = jsonDecode(rawEvents) as List;
+      _events.addAll(
+        list.map((e) => Event.fromJson(Map<String, dynamic>.from(e as Map))),
+      );
+    }
+
+    final rawNotifs = prefs.getString(_kNotifications);
+    if (rawNotifs != null) {
+      final list = jsonDecode(rawNotifs) as List;
+      _notifications.addAll(
+        list.map((e) =>
+            AppNotification.fromJson(Map<String, dynamic>.from(e as Map))),
+      );
+    }
+
+    // Pull any cross-user notifications that were written for this user.
+    await _drainSharedInbox(prefs);
+
+    notifyListeners();
+  }
+
+  /// Drain the shared inbox for the current user: any notifications pushed
+  /// by other users (e.g. task assignments, join alerts) are moved into this
+  /// user's local notification list so they appear in the UI.
+  Future<void> _drainSharedInbox(SharedPreferences prefs) async {
+    final uid = AuthStore.instance.userId;
+    if (uid.isEmpty) return;
+    final key = _sharedInboxKey(uid);
+    final raw = prefs.getString(key);
+    if (raw == null) return;
+    try {
+      final list = jsonDecode(raw) as List;
+      bool changed = false;
+      for (final e in list) {
+        final notif = AppNotification.fromJson(Map<String, dynamic>.from(e as Map));
+        // Upsert: remove any stale copy then insert fresh at top.
+        // This makes drain idempotent — safe to call multiple times.
+        final hadIt = _notifications.any((n) => n.id == notif.id);
+        _notifications.removeWhere((n) => n.id == notif.id);
+        _notifications.insert(0, notif);
+        if (!hadIt) changed = true;
+      }
+      // Clear the inbox so we don't re-process next time.
+      await prefs.remove(key);
+      if (changed) await _saveNotifications();
+    } catch (_) {
+      await prefs.remove(key); // corrupt data — just clear it
+    }
+  }
+
+  /// Public version so screens can call it on focus (e.g. didChangeDependencies).
+  Future<void> drainSharedInbox() async {
+    final prefs = await SharedPreferences.getInstance();
+    await _drainSharedInbox(prefs);
+    // Always notify so the UI reflects inbox items that arrived since last build.
+    notifyListeners();
+  }
+
+  /// Public entry point for pushing an invite notification from a dialog
+  /// that doesn't have access to _pushToUser directly.
+  Future<void> pushInviteNotification(String recipientUserId, AppNotification notif) =>
+      _pushToUser(recipientUserId, notif);
+
+  /// Push a notification into another user's shared inbox.
+  /// [recipientUserId] is the target user's stable ID from AuthStore.
+  Future<void> _pushToUser(String recipientUserId, AppNotification notif) async {
+    if (recipientUserId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final key = _sharedInboxKey(recipientUserId);
+    final raw = prefs.getString(key);
+    final List<dynamic> list =
+        raw != null ? (jsonDecode(raw) as List) : [];
+    // Dedup by id so duplicate pushes don't stack.
+    if (!list.any((e) => (e as Map)['id'] == notif.id)) {
+      list.add(notif.toJson());
+      await prefs.setString(key, jsonEncode(list));
+    }
+  }
+
+  /// Clear in-memory state and reload from storage for the current user.
+  Future<void> reload() async {
+    _tasks.clear();
+    _events.clear();
+    _notifications.clear();
+    await load();
+  }
+
+  Future<void> _saveTasks() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        _kTasks, jsonEncode(_tasks.map((t) => t.toJson()).toList()));
+  }
+
+  Future<void> _saveEvents() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        _kEvents, jsonEncode(_events.map((e) => e.toJson()).toList()));
+  }
+
+  Future<void> _saveNotifications() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        _kNotifications,
+        jsonEncode(_notifications.map((n) => n.toJson()).toList()));
+  }
 
   // ── Task Counts ──────────────────────────────────────────────────
   int get total      => _tasks.length;
@@ -22,8 +159,7 @@ class TaskStore extends ChangeNotifier {
   int get notStarted => _tasks.where((t) => t.status == TaskStatus.notStarted).length;
   int get completed  => _tasks.where((t) => t.status == TaskStatus.completed).length;
 
-  double get completionPercent =>
-      total == 0 ? 0 : (completed / total);
+  double get completionPercent => total == 0 ? 0 : (completed / total);
 
   // ── Tasks for a specific day ──────────────────────────────
   List<Task> tasksForDay(DateTime day) {
@@ -36,9 +172,8 @@ class TaskStore extends ChangeNotifier {
         if (a.dueTime == null && b.dueTime == null) return 0;
         if (a.dueTime == null) return 1;
         if (b.dueTime == null) return -1;
-        final aMin = a.dueTime!.hour * 60 + a.dueTime!.minute;
-        final bMin = b.dueTime!.hour * 60 + b.dueTime!.minute;
-        return aMin.compareTo(bMin);
+        return (a.dueTime!.hour * 60 + a.dueTime!.minute)
+            .compareTo(b.dueTime!.hour * 60 + b.dueTime!.minute);
       });
   }
 
@@ -54,24 +189,22 @@ class TaskStore extends ChangeNotifier {
         if (a.startTime == null && b.startTime == null) return 0;
         if (a.startTime == null) return 1;
         if (b.startTime == null) return -1;
-        final aMin = a.startTime!.hour * 60 + a.startTime!.minute;
-        final bMin = b.startTime!.hour * 60 + b.startTime!.minute;
-        return aMin.compareTo(bMin);
+        return (a.startTime!.hour * 60 + a.startTime!.minute)
+            .compareTo(b.startTime!.hour * 60 + b.startTime!.minute);
       });
   }
 
-  // ── Recent tasks (sorted by due date, closest first) ─────
   List<Task> get recentTasks {
     final sorted = List<Task>.from(_tasks);
     sorted.sort((a, b) => a.dueDate.compareTo(b.dueDate));
     return sorted;
   }
 
-  // ── Upcoming events (sorted by start date, soonest first) ─
   List<Event> get upcomingEvents {
     final now = DateTime.now();
     final sorted = _events
-        .where((e) => !e.endDate.isBefore(DateTime(now.year, now.month, now.day)))
+        .where((e) =>
+            !e.endDate.isBefore(DateTime(now.year, now.month, now.day)))
         .toList();
     sorted.sort((a, b) => a.startDate.compareTo(b.startDate));
     return sorted;
@@ -82,6 +215,8 @@ class TaskStore extends ChangeNotifier {
     _tasks.add(task);
     _generateTaskNotifications(task);
     notifyListeners();
+    _saveTasks();
+    _saveNotifications();
   }
 
   void updateStatus(String id, TaskStatus status) {
@@ -90,6 +225,8 @@ class TaskStore extends ChangeNotifier {
       _tasks[idx].status = status;
       _onStatusChanged(_tasks[idx]);
       notifyListeners();
+      _saveTasks();
+      _saveNotifications();
     }
   }
 
@@ -97,6 +234,8 @@ class TaskStore extends ChangeNotifier {
     _tasks.removeWhere((t) => t.id == id);
     _notifications.removeWhere((n) => n.sourceId == id);
     notifyListeners();
+    _saveTasks();
+    _saveNotifications();
   }
 
   // ── EVENT CRUD ────────────────────────────────────────────
@@ -104,16 +243,19 @@ class TaskStore extends ChangeNotifier {
     _events.add(event);
     _generateEventNotifications(event);
     notifyListeners();
+    _saveEvents();
+    _saveNotifications();
   }
 
   void updateEvent(Event updated) {
     final idx = _events.indexWhere((e) => e.id == updated.id);
     if (idx != -1) {
       _events[idx] = updated;
-      // Refresh notifications for this event
       _notifications.removeWhere((n) => n.sourceId == updated.id);
       _generateEventNotifications(updated);
       notifyListeners();
+      _saveEvents();
+      _saveNotifications();
     }
   }
 
@@ -121,27 +263,29 @@ class TaskStore extends ChangeNotifier {
     _events.removeWhere((e) => e.id == id);
     _notifications.removeWhere((n) => n.sourceId == id);
     notifyListeners();
+    _saveEvents();
+    _saveNotifications();
   }
 
   // ── Notification helpers ──────────────────────────────────
   void clearNotifications() {
     _notifications.clear();
     notifyListeners();
+    _saveNotifications();
   }
 
   void deleteNotification(String notifId) {
     _notifications.removeWhere((n) => n.id == notifId);
     notifyListeners();
+    _saveNotifications();
   }
 
-  bool get hasUnreadNotifications =>
-      _notifications.any((n) => !n.isRead);
+  bool get hasUnreadNotifications => _notifications.any((n) => !n.isRead);
 
   void markAllNotificationsRead() {
-    for (final n in _notifications) {
-      n.isRead = true;
-    }
+    for (final n in _notifications) n.isRead = true;
     notifyListeners();
+    _saveNotifications();
   }
 
   void markNotificationRead(String notifId) {
@@ -149,81 +293,139 @@ class TaskStore extends ChangeNotifier {
     if (idx != -1) {
       _notifications[idx].isRead = true;
       notifyListeners();
+      _saveNotifications();
     }
   }
 
   // ═════════════════════════════════════════════════════════
   // SPACE NOTIFICATIONS — public API
-  // Each method is called from SpacesScreen / SpaceChatStore
-  // at the relevant action site. They are all no-ops if a
-  // matching notification already exists (dedup guard).
   // ═════════════════════════════════════════════════════════
 
-  /// Space was created by the current user.
-  void notifySpaceCreated(Space space) {
-    _addSpaceNotif(_buildSpaceCreated(space));
+  void notifySpaceCreated(Space space) =>
+      _addSpaceNotif(_buildSpaceCreated(space));
+
+  void notifySpaceJoined(Space space) =>
+      _addSpaceNotif(_buildSpaceJoined(space));
+
+  /// Called when a new member joins a space.
+  /// Adds the "joined" notification for the joiner AND pushes an alert
+  /// to the creator's shared inbox so they are notified immediately.
+  Future<void> notifyMemberJoined(
+      Space space, String joinerName, String creatorName) async {
+    // The joiner already gets notifySpaceJoined() — just handle the creator side.
+    final creatorId = AuthStore.instance.userIdForName(creatorName);
+    if (creatorId == null || creatorId == AuthStore.instance.userId) return;
+    final notif = AppNotification(
+      id: 'space_member_joined_${space.inviteCode}_$joinerName',
+      type: NotificationType.spaceMemberJoined,
+      sourceId: space.inviteCode,
+      spaceInviteCode: space.inviteCode,
+      spaceAccentColor: space.accentColor,
+      title: space.name,
+      subtitle: '$joinerName joined your space 👋',
+      detail: '$joinerName has joined "${space.name}". Your team now has ${space.memberCount} members.',
+    );
+    await _pushToUser(creatorId, notif);
   }
 
-  /// Current user joined a space via invite code.
-  void notifySpaceJoined(Space space) {
-    _addSpaceNotif(_buildSpaceJoined(space));
-  }
-
-  /// A member was removed from a space (kicked).
-  void notifyMemberRemoved(Space space, String member) {
+  Future<void> notifyMemberRemoved(Space space, String member) async {
+    // Creator sees the removal locally.
     _addSpaceNotif(_buildMemberRemoved(space, member));
+    // Also tell the kicked member they were removed.
+    final kickedId = AuthStore.instance.userIdForName(member);
+    if (kickedId != null && kickedId != AuthStore.instance.userId) {
+      final kickedNotif = AppNotification(
+        id: 'space_you_removed_${space.inviteCode}',
+        type: NotificationType.spaceMemberRemoved,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: space.name,
+        subtitle: 'You were removed from a space',
+        detail: 'You were removed from "${space.name}".',
+      );
+      await _pushToUser(kickedId, kickedNotif);
+    }
   }
 
-  /// A new chat message arrived from [senderName] (not the current user).
-  /// Only generates a notification — unread dot logic stays in SpaceChatStore.
+  /// Called when the current user voluntarily leaves a space.
+  /// Pushes a notification to the creator and all remaining members.
+  Future<void> notifyMemberLeft(Space space, String leavingName) async {
+    final myId = AuthStore.instance.userId;
+    final notif = AppNotification(
+      id: 'space_member_left_${space.inviteCode}_$leavingName',
+      type: NotificationType.spaceMemberRemoved,
+      sourceId: space.inviteCode,
+      spaceInviteCode: space.inviteCode,
+      spaceAccentColor: space.accentColor,
+      title: space.name,
+      subtitle: '$leavingName left the space',
+      detail: '$leavingName has left "${space.name}".',
+    );
+    // Push to creator.
+    final creatorId = AuthStore.instance.userIdForName(space.creatorName);
+    if (creatorId != null && creatorId != myId) {
+      await _pushToUser(creatorId, notif);
+    }
+    // Push to every other member.
+    for (final member in space.members) {
+      if (member == leavingName) continue;
+      final uid = AuthStore.instance.userIdForName(member);
+      if (uid == null || uid == myId || uid == creatorId) continue;
+      await _pushToUser(uid, notif);
+    }
+  }
+
   void notifyNewChatMessage(Space space, String senderName, String preview) {
-    // Dedup: only one "new message" notif per space at a time.
-    // When the user opens the chat the caller should call
-    // clearChatNotificationsFor() to reset.
     final id = _chatNotifId(space.inviteCode);
     if (_notifications.any((n) => n.id == id)) return;
     _addSpaceNotif(_buildChatMessage(space, senderName, preview, id));
   }
 
-  /// Clears any pending chat-message notification for [spaceInviteCode].
-  /// Call this from SpaceChatSheet.initState() alongside markAsRead().
   void clearChatNotificationsFor(String spaceInviteCode) {
     final id = _chatNotifId(spaceInviteCode);
-    final hadAny = _notifications.any((n) => n.id == id);
-    if (hadAny) {
+    if (_notifications.any((n) => n.id == id)) {
       _notifications.removeWhere((n) => n.id == id);
       notifyListeners();
+      _saveNotifications();
     }
   }
 
-  /// A new task was added to a space.
-  void notifySpaceTaskAdded(Space space, SpaceTask task) {
-    _addSpaceNotif(_buildSpaceTaskAdded(space, task));
+  Future<void> notifySpaceTaskAdded(Space space, SpaceTask task) async {
+    final notif = _buildSpaceTaskAdded(space, task);
+    _addSpaceNotif(notif);
+    await _pushToOtherMembers(space, notif);
   }
 
-  /// The current user was assigned to a space task.
-  void notifySpaceTaskAssigned(
-      Space space, SpaceTask task, String currentUser) {
-    if (!task.assignedTo.contains(currentUser)) return;
-    _addSpaceNotif(_buildSpaceTaskAssigned(space, task));
+  /// Notify all users assigned to [task].
+  /// For the current user: adds directly to their local notification list.
+  /// For other users: pushes into their shared inbox so they see it next time
+  /// they open the app or navigate to the Spaces screen.
+  Future<void> notifySpaceTaskAssigned(
+      Space space, SpaceTask task, String currentUser) async {
+    final notif = _buildSpaceTaskAssigned(space, task);
+    for (final assignee in task.assignedTo) {
+      if (assignee == currentUser || assignee == 'You' || assignee == 'You (Creator)') {
+        // This is the acting user — add locally.
+        _addSpaceNotif(notif);
+      } else {
+        // Another user — look up their ID and push to their inbox.
+        final uid = AuthStore.instance.userIdForName(assignee);
+        if (uid != null) await _pushToUser(uid, notif);
+      }
+    }
   }
 
-  /// A space task's status changed (not completed — use notifySpaceTaskCompleted
-  /// for that).
-  void notifySpaceTaskStatusChanged(Space space, SpaceTask task) {
-    if (task.status == 'Completed') return; // handled separately
-    // Always replace the previous status notif for this task so the card
-    // reflects the latest status rather than silently deduping the old one.
+  Future<void> notifySpaceTaskStatusChanged(Space space, SpaceTask task) async {
+    if (task.status == 'Completed') return;
     final id = 'space_task_status_${space.inviteCode}_${task.title}';
     _notifications.removeWhere((n) => n.id == id);
-    _addSpaceNotif(_buildSpaceTaskStatus(space, task));
+    final notif = _buildSpaceTaskStatus(space, task);
+    _addSpaceNotif(notif);
+    await _pushToOtherMembers(space, notif);
   }
 
-  /// A space task was marked as completed.
-  void notifySpaceTaskCompleted(Space space, SpaceTask task) {
-    // Remove ALL prior notifs for this task (status, overdue, due-soon, and
-    // any previous done card) so re-completing after uncompleting doesn't
-    // leave a stale completed card alongside the new one.
+  Future<void> notifySpaceTaskCompleted(Space space, SpaceTask task) async {
     _notifications.removeWhere((n) =>
         n.spaceInviteCode == space.inviteCode &&
         n.title == task.title &&
@@ -231,54 +433,52 @@ class TaskStore extends ChangeNotifier {
             n.type == NotificationType.spaceTaskOverdue ||
             n.type == NotificationType.spaceTaskDueSoon ||
             n.type == NotificationType.spaceTaskCompleted));
-    _addSpaceNotif(_buildSpaceTaskCompleted(space, task));
+    final notif = _buildSpaceTaskCompleted(space, task);
+    _addSpaceNotif(notif);
+    await _pushToOtherMembers(space, notif);
   }
 
-  /// Removes every notification that belongs to [spaceInviteCode].
-  /// Call this when the user deletes or leaves a space so the notification
-  /// centre doesn't show orphaned cards.
   void clearSpaceNotifications(String spaceInviteCode) {
-    final hadAny =
-        _notifications.any((n) => n.spaceInviteCode == spaceInviteCode);
-    if (hadAny) {
-      _notifications
-          .removeWhere((n) => n.spaceInviteCode == spaceInviteCode);
+    if (_notifications.any((n) => n.spaceInviteCode == spaceInviteCode)) {
+      _notifications.removeWhere((n) => n.spaceInviteCode == spaceInviteCode);
       notifyListeners();
+      _saveNotifications();
     }
   }
 
-  /// Call once when a space is added (created or joined) to schedule
-  /// due-soon and overdue alerts for its existing tasks.
   void generateSpaceTaskDeadlineAlerts(Space space) {
     for (final task in space.tasks) {
       if (task.status == 'Completed') continue;
       _maybeAddDeadlineAlert(space, task);
     }
-    // notifyListeners called inside _addSpaceNotif if anything was added.
   }
 
-  /// Call when a new task is added to an existing space, or when a task's
-  /// status changes, to refresh deadline alerts for that specific task.
   void refreshDeadlineAlertFor(Space space, SpaceTask task) {
-    // Remove stale alerts for this task first.
     _notifications.removeWhere((n) =>
         n.spaceInviteCode == space.inviteCode &&
         n.title == task.title &&
         (n.type == NotificationType.spaceTaskDueSoon ||
             n.type == NotificationType.spaceTaskOverdue));
-    if (task.status != 'Completed') {
-      _maybeAddDeadlineAlert(space, task);
-    }
+    if (task.status != 'Completed') _maybeAddDeadlineAlert(space, task);
   }
 
   // ── Space notification internals ──────────────────────────
 
-  /// Dedup-safe inserter for space notifications.
-  /// Skips silently if a notification with the same id already exists.
+  /// Push [notif] to every member of [space] except the current user.
+  Future<void> _pushToOtherMembers(Space space, AppNotification notif) async {
+    final myId = AuthStore.instance.userId;
+    for (final member in space.members) {
+      final uid = AuthStore.instance.userIdForName(member);
+      if (uid == null || uid == myId) continue;
+      await _pushToUser(uid, notif);
+    }
+  }
+
   void _addSpaceNotif(AppNotification notif) {
     if (_notifications.any((n) => n.id == notif.id)) return;
     _notifications.insert(0, notif);
     notifyListeners();
+    _saveNotifications();
   }
 
   String _chatNotifId(String inviteCode) => 'space_chat_$inviteCode';
@@ -286,25 +486,15 @@ class TaskStore extends ChangeNotifier {
   void _maybeAddDeadlineAlert(Space space, SpaceTask task) {
     final now   = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-
-    // Parse the space's dueDate ("M/D/YYYY") as a proxy for individual
-    // task deadlines when tasks don't carry their own due date.
-    // When your SpaceTask model gains a dueDate field, swap this in.
     DateTime? due;
     try {
       final parts = space.dueDate.split('/');
-      due = DateTime(
-        int.parse(parts[2]),
-        int.parse(parts[0]),
-        int.parse(parts[1]),
-      );
+      due = DateTime(int.parse(parts[2]), int.parse(parts[0]), int.parse(parts[1]));
     } catch (_) {
       return;
     }
-
     final dueDay = DateTime(due.year, due.month, due.day);
-    final days = dueDay.difference(today).inDays;
-
+    final days   = dueDay.difference(today).inDays;
     if (dueDay.isBefore(today)) {
       _addSpaceNotif(_buildSpaceTaskOverdue(space, task));
     } else if (days == 1) {
@@ -322,8 +512,7 @@ class TaskStore extends ChangeNotifier {
         spaceAccentColor: space.accentColor,
         title: space.name,
         subtitle: 'Space created 🚀',
-        detail: 'You created "${space.name}". '
-            'Share the invite code ${space.inviteCode} with your team.',
+        detail: 'You created "${space.name}". Share the invite code ${space.inviteCode} with your team.',
       );
 
   AppNotification _buildSpaceJoined(Space space) => AppNotification(
@@ -334,13 +523,11 @@ class TaskStore extends ChangeNotifier {
         spaceAccentColor: space.accentColor,
         title: space.name,
         subtitle: 'You joined a space 👋',
-        detail: 'Welcome to "${space.name}". '
-            'You can see tasks, chat with members, and track progress here.',
+        detail: 'Welcome to "${space.name}". You can see tasks, chat with members, and track progress here.',
       );
 
   AppNotification _buildMemberRemoved(Space space, String member) =>
       AppNotification(
-        // Use member name in id so each kick gets its own notif.
         id: 'space_kick_${space.inviteCode}_$member',
         type: NotificationType.spaceMemberRemoved,
         sourceId: space.inviteCode,
@@ -351,12 +538,7 @@ class TaskStore extends ChangeNotifier {
         detail: '$member was removed from "${space.name}".',
       );
 
-  AppNotification _buildChatMessage(
-    Space space,
-    String sender,
-    String preview,
-    String id,
-  ) =>
+  AppNotification _buildChatMessage(Space space, String sender, String preview, String id) =>
       AppNotification(
         id: id,
         type: NotificationType.spaceChatMessage,
@@ -365,9 +547,7 @@ class TaskStore extends ChangeNotifier {
         spaceAccentColor: space.accentColor,
         title: space.name,
         subtitle: '$sender sent a message 💬',
-        detail: preview.length > 80
-            ? '${preview.substring(0, 80)}…'
-            : preview,
+        detail: preview.length > 80 ? '${preview.substring(0, 80)}…' : preview,
       );
 
   AppNotification _buildSpaceTaskAdded(Space space, SpaceTask task) =>
@@ -396,7 +576,6 @@ class TaskStore extends ChangeNotifier {
 
   AppNotification _buildSpaceTaskStatus(Space space, SpaceTask task) =>
       AppNotification(
-        // Always the same id per task so repeated status cycles replace each other.
         id: 'space_task_status_${space.inviteCode}_${task.title}',
         type: NotificationType.spaceTaskStatus,
         sourceId: space.inviteCode,
@@ -428,8 +607,7 @@ class TaskStore extends ChangeNotifier {
         spaceAccentColor: space.accentColor,
         title: task.title,
         subtitle: '⏰ Due tomorrow — ${space.name}',
-        detail: '"${task.title}" in "${space.name}" is due tomorrow. '
-            'Make sure it\'s on track.',
+        detail: '"${task.title}" in "${space.name}" is due tomorrow. Make sure it\'s on track.',
       );
 
   AppNotification _buildSpaceTaskOverdue(Space space, SpaceTask task) =>
@@ -445,10 +623,8 @@ class TaskStore extends ChangeNotifier {
       );
 
   // ═════════════════════════════════════════════════════════
-  // EXISTING task / event internals — unchanged below
+  // EXISTING task / event internals
   // ═════════════════════════════════════════════════════════
-
-  // ── Task notification generation ──────────────────────────
 
   void _generateTaskNotifications(Task task) {
     final now   = DateTime.now();
@@ -462,7 +638,6 @@ class TaskStore extends ChangeNotifier {
       _addNotification(_buildOverdue(task));
       return;
     }
-
     if (due == today) {
       _addNotification(_buildDueToday(task));
       return;
@@ -470,51 +645,16 @@ class TaskStore extends ChangeNotifier {
 
     switch (task.priority) {
       case TaskPriority.high:
-        if (days == 7) {
-          _addNotification(_buildAdvanceReminder(
-            task: task, daysAhead: 7,
-            subtitle: '📌 High Priority — Plan ahead',
-            detail: 'Start planning now. Aim to begin at least a week before the deadline.',
-          ));
-        } else if (days == 3) {
-          _addNotification(_buildAdvanceReminder(
-            task: task, daysAhead: 3,
-            subtitle: '⚡ High Priority — Act soon',
-            detail: 'Only 3 days left. Break this into steps and start today.',
-          ));
-        } else if (days == 1) {
-          _addNotification(_buildAdvanceReminder(
-            task: task, daysAhead: 1,
-            subtitle: '🔴 High Priority — Due tomorrow!',
-            detail: 'Final push! Make sure this is your top focus today.',
-          ));
-        }
+        if (days == 7) _addNotification(_buildAdvanceReminder(task: task, daysAhead: 7, subtitle: '📌 High Priority — Plan ahead', detail: 'Start planning now. Aim to begin at least a week before the deadline.'));
+        if (days == 3) _addNotification(_buildAdvanceReminder(task: task, daysAhead: 3, subtitle: '⚡ High Priority — Act soon', detail: 'Only 3 days left. Break this into steps and start today.'));
+        if (days == 1) _addNotification(_buildAdvanceReminder(task: task, daysAhead: 1, subtitle: '🔴 High Priority — Due tomorrow!', detail: 'Final push! Make sure this is your top focus today.'));
         break;
-
       case TaskPriority.medium:
-        if (days == 3) {
-          _addNotification(_buildAdvanceReminder(
-            task: task, daysAhead: 3,
-            subtitle: '🟡 Medium Priority — Don\'t delay',
-            detail: 'You have 3 days. Schedule some time to work on this soon.',
-          ));
-        } else if (days == 1) {
-          _addNotification(_buildAdvanceReminder(
-            task: task, daysAhead: 1,
-            subtitle: '🟡 Medium Priority — Due tomorrow',
-            detail: 'Last chance to wrap this up before the deadline.',
-          ));
-        }
+        if (days == 3) _addNotification(_buildAdvanceReminder(task: task, daysAhead: 3, subtitle: '🟡 Medium Priority — Don\'t delay', detail: 'You have 3 days. Schedule some time to work on this soon.'));
+        if (days == 1) _addNotification(_buildAdvanceReminder(task: task, daysAhead: 1, subtitle: '🟡 Medium Priority — Due tomorrow', detail: 'Last chance to wrap this up before the deadline.'));
         break;
-
       case TaskPriority.low:
-        if (days == 1) {
-          _addNotification(_buildAdvanceReminder(
-            task: task, daysAhead: 1,
-            subtitle: '🟢 Low Priority — Due tomorrow',
-            detail: 'A low-priority task is due soon. Knock it out if you have a free moment.',
-          ));
-        }
+        if (days == 1) _addNotification(_buildAdvanceReminder(task: task, daysAhead: 1, subtitle: '🟢 Low Priority — Due tomorrow', detail: 'A low-priority task is due soon. Knock it out if you have a free moment.'));
         break;
     }
   }
@@ -528,86 +668,37 @@ class TaskStore extends ChangeNotifier {
     }
   }
 
-  // ── Event notification generation ─────────────────────────
-
   void _generateEventNotifications(Event event) {
     final now   = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final start = DateTime(event.startDate.year, event.startDate.month, event.startDate.day);
+    final end   = DateTime(event.endDate.year,   event.endDate.month,   event.endDate.day);
     final days  = start.difference(today).inDays;
 
-    // Event already ended — no notifications
-    final end = DateTime(event.endDate.year, event.endDate.month, event.endDate.day);
     if (end.isBefore(today)) return;
-
-    // Starting today
-    if (start == today) {
-      _addNotification(_buildEventToday(event));
-      return;
-    }
-
-    // Reminder 1 day before
-    if (days == 1) {
-      _addNotification(_buildEventReminder(event, daysAhead: 1));
-      return;
-    }
-
-    // Reminder 3 days before
-    if (days == 3) {
-      _addNotification(_buildEventReminder(event, daysAhead: 3));
-      return;
-    }
-
-    // Reminder 7 days before
-    if (days == 7) {
-      _addNotification(_buildEventReminder(event, daysAhead: 7));
-    }
+    if (start == today) { _addNotification(_buildEventToday(event)); return; }
+    if (days == 1) { _addNotification(_buildEventReminder(event, daysAhead: 1)); return; }
+    if (days == 3) { _addNotification(_buildEventReminder(event, daysAhead: 3)); return; }
+    if (days == 7)   _addNotification(_buildEventReminder(event, daysAhead: 7));
   }
 
-  // ── Notification inserter (task/event) ────────────────────
   void _addNotification(AppNotification notif) {
     _notifications.insert(0, notif);
   }
 
-  // ── Task builders ─────────────────────────────────────────
-
   String _fmtDate(DateTime d) {
-    const months = [
-      'Jan','Feb','Mar','Apr','May','Jun',
-      'Jul','Aug','Sep','Oct','Nov','Dec',
-    ];
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return '${months[d.month - 1]} ${d.day}, ${d.year}';
   }
 
   String _categoryLabel(Task task) =>
       task.category.isAcademic ? 'Academic Task Reminder' : 'Personal Task Reminder';
 
-  AppNotification _buildAdvanceReminder({
-    required Task task,
-    required int daysAhead,
-    required String subtitle,
-    required String detail,
-  }) => AppNotification(
-    id: '${task.id}_remind_${daysAhead}d',
-    type: NotificationType.taskReminder,
-    sourceId: task.id,
-    taskCategory: task.category,
-    priority: task.priority,
-    title: task.name,
-    subtitle: subtitle,
-    detail: detail,
-  );
+  AppNotification _buildAdvanceReminder({required Task task, required int daysAhead, required String subtitle, required String detail}) =>
+      AppNotification(id: '${task.id}_remind_${daysAhead}d', type: NotificationType.taskReminder, sourceId: task.id, taskCategory: task.category, priority: task.priority, title: task.name, subtitle: subtitle, detail: detail);
 
-  AppNotification _buildDueToday(Task task) => AppNotification(
-    id: '${task.id}_today',
-    type: NotificationType.taskDueToday,
-    sourceId: task.id,
-    taskCategory: task.category,
-    priority: task.priority,
-    subtitle: 'Due today!',
-    title: task.name,
-    detail: _priorityDueTodayDetail(task.priority),
-  );
+  AppNotification _buildDueToday(Task task) =>
+      AppNotification(id: '${task.id}_today', type: NotificationType.taskDueToday, sourceId: task.id, taskCategory: task.category, priority: task.priority, subtitle: 'Due today!', title: task.name, detail: _priorityDueTodayDetail(task.priority));
 
   String _priorityDueTodayDetail(TaskPriority p) {
     switch (p) {
@@ -617,16 +708,8 @@ class TaskStore extends ChangeNotifier {
     }
   }
 
-  AppNotification _buildOverdue(Task task) => AppNotification(
-    id: '${task.id}_overdue',
-    type: NotificationType.taskOverdue,
-    sourceId: task.id,
-    taskCategory: task.category,
-    priority: task.priority,
-    subtitle: 'This task is overdue!',
-    title: task.name,
-    detail: _priorityOverdueDetail(task.priority, task.dueDate),
-  );
+  AppNotification _buildOverdue(Task task) =>
+      AppNotification(id: '${task.id}_overdue', type: NotificationType.taskOverdue, sourceId: task.id, taskCategory: task.category, priority: task.priority, subtitle: 'This task is overdue!', title: task.name, detail: _priorityOverdueDetail(task.priority, task.dueDate));
 
   String _priorityOverdueDetail(TaskPriority p, DateTime due) {
     final label = _fmtDate(due);
@@ -637,30 +720,21 @@ class TaskStore extends ChangeNotifier {
     }
   }
 
-  AppNotification _buildCompleted(Task task) => AppNotification(
-    id: '${task.id}_done',
-    type: NotificationType.taskCompleted,
-    sourceId: task.id,
-    taskCategory: task.category,
-    priority: task.priority,
-    subtitle: 'Great job! Task completed. 🎉',
-    title: task.name,
-    detail: _categoryLabel(task),
-  );
+  AppNotification _buildCompleted(Task task) =>
+      AppNotification(id: '${task.id}_done', type: NotificationType.taskCompleted, sourceId: task.id, taskCategory: task.category, priority: task.priority, subtitle: 'Great job! Task completed. 🎉', title: task.name, detail: _categoryLabel(task));
 
-  // ── Event builders ────────────────────────────────────────
-
-  AppNotification _buildEventToday(Event event) => AppNotification(
-    id: '${event.id}_event_today',
-    type: NotificationType.eventToday,
-    sourceId: event.id,
-    eventCategory: event.category,
-    title: event.title,
-    subtitle: '📅 Happening today!',
-    detail: event.location != null
-        ? 'Your event starts today${event.startTime != null ? ' at ${_fmtTime(event.startTime!)}' : ''}. Location: ${event.location}'
-        : 'Your event starts today${event.startTime != null ? ' at ${_fmtTime(event.startTime!)}' : ''}.',
-  );
+  AppNotification _buildEventToday(Event event) =>
+      AppNotification(
+        id: '${event.id}_event_today',
+        type: NotificationType.eventToday,
+        sourceId: event.id,
+        eventCategory: event.category,
+        title: event.title,
+        subtitle: '📅 Happening today!',
+        detail: event.location != null
+            ? 'Your event starts today${event.startTime != null ? ' at ${_fmtTime(event.startTime!)}' : ''}. Location: ${event.location}'
+            : 'Your event starts today${event.startTime != null ? ' at ${_fmtTime(event.startTime!)}' : ''}.',
+      );
 
   AppNotification _buildEventReminder(Event event, {required int daysAhead}) {
     final dayLabel = daysAhead == 1 ? 'tomorrow' : 'in $daysAhead days';

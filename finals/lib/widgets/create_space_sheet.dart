@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../constants/colors.dart';
+import '../store/auth_store.dart';
 
 // ─────────────────────────────────────────────────────────────
 // Result model (returned to caller)
@@ -212,13 +214,22 @@ class _CreateSpaceSheetState extends State<CreateSpaceSheet>
                 Text('Enter User ID',
                   style: TextStyle(color: kWhite.withOpacity(0.5), fontSize: 11,
                     letterSpacing: 0.6, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 4),
+                Text('Ask the user to share their #ID from the drawer.',
+                  style: TextStyle(color: kWhite.withOpacity(0.3), fontSize: 11)),
                 const SizedBox(height: 6),
                 TextField(
                   controller: ctrl,
                   autofocus: true,
-                  style: const TextStyle(color: kWhite, fontSize: 14),
+                  maxLength: 9,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[#0-9a-fA-F]')),
+                  ],
+                  style: const TextStyle(color: kWhite, fontSize: 14,
+                    letterSpacing: 1.5, fontWeight: FontWeight.w600),
                   decoration: InputDecoration(
-                    hintText: '#UserID123',
+                    hintText: '#a1b2c3d4',
+                    counterText: '',
                     hintStyle: TextStyle(color: kWhite.withOpacity(0.25)),
                     filled: true,
                     fillColor: kWhite.withOpacity(0.06),
@@ -251,17 +262,31 @@ class _CreateSpaceSheetState extends State<CreateSpaceSheet>
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       onPressed: () {
-                        final uid = ctrl.text.trim();
-                        if (uid.isEmpty) {
+                        final raw = ctrl.text.trim();
+                        if (raw.isEmpty) {
                           setDlg(() => error = 'Please enter a User ID');
                           return;
                         }
-                        if (_members.contains(uid)) {
+                        final cleaned = raw.startsWith('#') ? raw.substring(1) : raw;
+                        if (!RegExp(r'^[0-9a-fA-F]{8}$').hasMatch(cleaned)) {
+                          setDlg(() => error = 'Enter a valid User ID (e.g. #a1b2c3d4)');
+                          return;
+                        }
+                        final resolvedName = AuthStore.instance.nameForId(cleaned);
+                        if (resolvedName == null) {
+                          setDlg(() => error = 'No user found with that ID');
+                          return;
+                        }
+                        if (resolvedName == AuthStore.instance.displayName) {
+                          setDlg(() => error = "That's you!");
+                          return;
+                        }
+                        if (_members.contains(resolvedName)) {
                           setDlg(() => error = 'Already added');
                           return;
                         }
                         Navigator.pop(ctx);
-                        setState(() => _members.add(uid));
+                        setState(() => _members.add(resolvedName));
                       },
                       child: const Text('Add'),
                     ),

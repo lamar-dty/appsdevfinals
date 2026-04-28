@@ -17,6 +17,7 @@ enum NotificationType {
   spaceCreated,       // user created a new space
   spaceJoined,        // user joined a space
   spaceMemberRemoved, // a member was kicked
+  spaceMemberJoined,  // a new member joined the space
   spaceChatMessage,   // new chat message from another member
   spaceTaskAdded,     // a new task was added to a space
   spaceTaskAssigned,  // current user was assigned to a task
@@ -85,6 +86,7 @@ class AppNotification {
       case NotificationType.spaceCreated:       return Icons.rocket_launch_rounded;
       case NotificationType.spaceJoined:        return Icons.login_rounded;
       case NotificationType.spaceMemberRemoved: return Icons.person_remove_rounded;
+      case NotificationType.spaceMemberJoined:  return Icons.person_add_rounded;
       case NotificationType.spaceChatMessage:   return Icons.chat_rounded;
       case NotificationType.spaceTaskAdded:     return Icons.playlist_add_rounded;
       case NotificationType.spaceTaskAssigned:  return Icons.person_pin_rounded;
@@ -107,4 +109,48 @@ class AppNotification {
 
   // ── Convenience: is this a space notification? ────────────
   bool get isSpaceNotification => spaceInviteCode != null;
+
+  // ── Serialisation ─────────────────────────────────────────
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'type': type.index,
+        'sourceId': sourceId,
+        'title': title,
+        'subtitle': subtitle,
+        'detail': detail,
+        'createdAt': createdAt.millisecondsSinceEpoch,
+        'isRead': isRead,
+        'taskCategory': taskCategory?.index,
+        'priority': priority?.index,
+        'eventCategory': eventCategory?.index,
+        'spaceInviteCode': spaceInviteCode,
+        'spaceAccentColor': spaceAccentColor?.value,
+      };
+
+  factory AppNotification.fromJson(Map<String, dynamic> j) =>
+      AppNotification(
+        id: j['id'] as String,
+        type: NotificationType.values[j['type'] as int],
+        sourceId: j['sourceId'] as String,
+        title: j['title'] as String,
+        subtitle: j['subtitle'] as String,
+        detail: j['detail'] as String,
+        createdAt:
+            DateTime.fromMillisecondsSinceEpoch(j['createdAt'] as int),
+        isRead: j['isRead'] as bool,
+        taskCategory: j['taskCategory'] == null
+            ? null
+            : TaskCategory.values[j['taskCategory'] as int],
+        priority: j['priority'] == null
+            ? null
+            : TaskPriority.values[j['priority'] as int],
+        eventCategory: j['eventCategory'] == null
+            ? null
+            : EventCategory.values[j['eventCategory'] as int],
+        spaceInviteCode: j['spaceInviteCode'] as String?,
+        spaceAccentColor: j['spaceAccentColor'] == null
+            ? null
+            : Color(j['spaceAccentColor'] as int),
+      );
 }

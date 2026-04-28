@@ -12,6 +12,7 @@ import '../widgets/spaces/space_detail_sheet.dart';
 import '../widgets/spaces/space_dialogs.dart';
 import '../widgets/spaces/space_chat_fab.dart';
 import '../store/space_store.dart';
+import '../store/auth_store.dart';
 
 // ─────────────────────────────────────────────────────────────
 // Screen
@@ -50,6 +51,23 @@ class SpacesScreenState extends State<SpacesScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Pull latest tasks/status/members from shared patches so all users
+    // see each other's changes when they return to this screen.
+    SpaceStore.instance.syncFromSharedPatches().then((_) {
+      if (mounted) setState(() {});
+    });
+    // Drain any spaces that were pushed directly to this user by invite.
+    SpaceStore.instance.drainPendingInvites().then((_) {
+      if (mounted) setState(() {});
+    });
+    // Drain any cross-user notifications (assignments, join alerts) written
+    // while this user was away.
+    TaskStore.instance.drainSharedInbox();
+  }
+
+  @override
   void dispose() {
     _sheetController.dispose();
     _switchAnim.dispose();
@@ -57,15 +75,13 @@ class SpacesScreenState extends State<SpacesScreen>
   }
 
   // ── Public entry point for create_space_sheet ──────────────
-  void addSpace(SpaceResult result) {
-    setState(() {
-      final space = _spaceFromResult(result);
-      SpaceStore.instance.addSpace(space);
-
-      // Notify: space created + schedule deadline alerts for any pre-loaded tasks.
-      TaskStore.instance.notifySpaceCreated(space);
-      TaskStore.instance.generateSpaceTaskDeadlineAlerts(space);
-    });
+  Future<void> addSpace(SpaceResult result) async {
+    final space = _spaceFromResult(result);
+    await SpaceStore.instance.addSpace(space);
+    setState(() {});
+    // Notify: space created + schedule deadline alerts for any pre-loaded tasks.
+    TaskStore.instance.notifySpaceCreated(space);
+    TaskStore.instance.generateSpaceTaskDeadlineAlerts(space);
   }
 
   // ── Navigation ─────────────────────────────────────────────
@@ -90,11 +106,14 @@ class SpacesScreenState extends State<SpacesScreen>
   }
 
   // ── Task mutations ─────────────────────────────────────────
+  void _saveSpaces() => SpaceStore.instance.save();
+
   void _deleteTask(Space space, SpaceTask task) {
     setState(() {
       space.tasks.remove(task);
       space.recalculate();
     });
+    _saveSpaces();
   }
 
   void _reorderTask(Space space, int oldIndex, int newIndex) {
@@ -103,6 +122,7 @@ class SpacesScreenState extends State<SpacesScreen>
       final task = space.tasks.removeAt(oldIndex);
       space.tasks.insert(newIndex, task);
     });
+    _saveSpaces();
   }
 
   void _addTaskToSpace(Space space, String title, String note) {
@@ -116,6 +136,7 @@ class SpacesScreenState extends State<SpacesScreen>
       space.tasks.add(task);
       space.recalculate();
     });
+    _saveSpaces();
 
     // Notify: task added + check deadline alerts for it.
     TaskStore.instance.notifySpaceTaskAdded(space, task);
@@ -123,19 +144,29 @@ class SpacesScreenState extends State<SpacesScreen>
   }
 
   // ── Space mutations ────────────────────────────────────────
-  void _removeSpace(Space space) {
-    // Remove all notifications that belong to this space before removing the
-    // space itself, so the notification centre doesn't show orphaned cards.
+  Future<void> _removeSpace(Space space) async {
+    if (!space.isCreator) {
+      final leavingName = AuthStore.instance.displayName;
+      // Strip the leaver from every task's assignedTo list and write the
+      // cleaned state to shared patches so other members see it on next sync.
+      for (final task in space.tasks) {
+        task.assignedTo.remove(leavingName);
+      }
+      space.members.remove(leavingName);
+      await SpaceStore.instance.writeSharedPatchForLeave(space);
+      // Notify remaining members that someone left.
+      await TaskStore.instance.notifyMemberLeft(space, leavingName);
+    }
     TaskStore.instance.clearSpaceNotifications(space.inviteCode);
+    SpaceChatStore.instance.deleteMessagesFor(space.inviteCode);
+    await SpaceStore.instance.removeSpace(space);
     setState(() {
-      SpaceStore.instance.removeSpace(space);
       if (_selectedSpace == space) _selectedSpace = null;
     });
   }
 
   // ── Dialog bridges ─────────────────────────────────────────
   void _onTaskTapped(Space space, SpaceTask task) {
-    // Snapshot the current user for this space.
     final currentUser = _resolvedCurrentUser(space);
 
     showModalBottomSheet(
@@ -152,27 +183,36 @@ class SpacesScreenState extends State<SpacesScreen>
             task.cycleStatus();
             space.recalculate();
           });
+          _saveSpaces();
 
-          // Notify: status changed or completed.
           if (task.status == 'Completed') {
             TaskStore.instance.notifySpaceTaskCompleted(space, task);
           } else {
             TaskStore.instance.notifySpaceTaskStatusChanged(space, task);
           }
-          // Refresh deadline alert in case it is now complete.
           TaskStore.instance.refreshDeadlineAlertFor(space, task);
         },
         onAssign: (members) {
           setState(() => task.assignedTo = members);
-          // Notify: current user was assigned.
-          TaskStore.instance.notifySpaceTaskAssigned(space, task, currentUser);
+          _saveSpaces();
+          TaskStore.instance.notifySpaceTaskAssigned(space, task, currentUser); // async — fire and forget
         },
-        onUpdateNotes: (notes) => setState(() => task.description = notes),
-        onUpdateTitle: (title) => setState(() => task.title = title),
-        onAddAttachment: (name) =>
-            setState(() => task.attachments.add(SpaceAttachment(name: name))),
-        onRemoveAttachment: (a) =>
-            setState(() => task.attachments.remove(a)),
+        onUpdateNotes: (notes) {
+          setState(() => task.description = notes);
+          _saveSpaces();
+        },
+        onUpdateTitle: (title) {
+          setState(() => task.title = title);
+          _saveSpaces();
+        },
+        onAddAttachment: (name) {
+          setState(() => task.attachments.add(SpaceAttachment(name: name)));
+          _saveSpaces();
+        },
+        onRemoveAttachment: (a) {
+          setState(() => task.attachments.remove(a));
+          _saveSpaces();
+        },
         onDelete: () {
           showConfirmDeleteTask(
             context,
@@ -235,6 +275,7 @@ class SpacesScreenState extends State<SpacesScreen>
             task.assignedTo.remove(member);
           }
         });
+        _saveSpaces();
 
         // Notify: member removed.
         TaskStore.instance.notifyMemberRemoved(space, member);
@@ -246,8 +287,9 @@ class SpacesScreenState extends State<SpacesScreen>
     showJoinSpaceDialog(
       context,
       isAlreadyJoined: (code) => _spaces.any((s) => s.inviteCode == code),
-      onJoin: (code) {
+      onJoin: (code) async {
         if (code == '00000000') {
+          // ── Demo space ──────────────────────────────────
           final newSpace = Space(
             name: 'Final Thesis',
             description: 'Shared workspace for the team.',
@@ -259,6 +301,7 @@ class SpacesScreenState extends State<SpacesScreen>
               'Mika',
             ],
             isCreator: false,
+            creatorName: 'Alex',
             status: 'Not Started',
             statusColor: const Color(0xFFB0BAD3),
             accentColor: const Color(0xFF6C63FF),
@@ -282,22 +325,71 @@ class SpacesScreenState extends State<SpacesScreen>
             ],
             inviteCode: '00000000',
           );
-          setState(() => SpaceStore.instance.addSpace(newSpace));
-
-          // Notify: joined + schedule deadline alerts.
+          await SpaceStore.instance.addSpace(newSpace);
+          setState(() {});
           TaskStore.instance.notifySpaceJoined(newSpace);
           TaskStore.instance.generateSpaceTaskDeadlineAlerts(newSpace);
-
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            // Seed history first so it sits below older timestamps,
-            // then append the join message so it appears at the bottom.
             _seedFinalThesisChat(newSpace.inviteCode);
             SpaceChatStore.instance.addSystemMessage(
               newSpace.inviteCode,
               'You joined the space.',
             );
           });
+          return;
         }
+
+        // ── Real invite code — look up in global registry ──
+        final found = await SpaceStore.instance.lookupByCode(code);
+        if (found == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No space found with that invite code.')),
+            );
+          }
+          return;
+        }
+
+        // Add to this user's space list as a non-creator member.
+        final joined = Space(
+          name: found.name,
+          description: found.description,
+          dateRange: found.dateRange,
+          dueDate: found.dueDate,
+          members: List<String>.from(found.members)
+            ..add(AuthStore.instance.displayName),
+          isCreator: false,
+          creatorName: found.creatorName,
+          status: found.status,
+          statusColor: found.statusColor,
+          accentColor: found.accentColor,
+          progress: found.progress,
+          completedTasks: found.completedTasks,
+          tasks: found.tasks,
+          inviteCode: found.inviteCode,
+        );
+
+        await SpaceStore.instance.addSpace(joined);
+        // Patch the global registry member list so the creator sees the new joiner.
+        await SpaceStore.instance.patchMembersInRegistry(
+          joined.inviteCode,
+          joined.members,
+        );
+        setState(() {});
+        TaskStore.instance.notifySpaceJoined(joined);
+        // Push a notification to the creator's inbox so they see the new member.
+        await TaskStore.instance.notifyMemberJoined(
+          joined,
+          AuthStore.instance.displayName,
+          joined.creatorName,
+        );
+        TaskStore.instance.generateSpaceTaskDeadlineAlerts(joined);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          SpaceChatStore.instance.addSystemMessage(
+            joined.inviteCode,
+            '${AuthStore.instance.displayName} joined the space.',
+          );
+        });
       },
     );
   }
@@ -450,16 +542,14 @@ class SpacesScreenState extends State<SpacesScreen>
   }
 
   void _onAddSpace() {
-    showCreateSpaceSheet(context, onSaved: (result) {
+    showCreateSpaceSheet(context, onSaved: (result) async {
       final space = _spaceFromResult(result);
-      setState(() {
-        SpaceStore.instance.addSpace(space);
-        SpaceChatStore.instance.addSystemMessage(
-          space.inviteCode,
-          '${space.members.isNotEmpty ? space.members.first : "You"} created the space.',
-        );
-      });
-
+      await SpaceStore.instance.addSpace(space);
+      setState(() {});
+      SpaceChatStore.instance.addSystemMessage(
+        space.inviteCode,
+        '${space.members.isNotEmpty ? space.members.first : "You"} created the space.',
+      );
       // Notify: space created + schedule any pre-loaded task deadline alerts.
       TaskStore.instance.notifySpaceCreated(space);
       TaskStore.instance.generateSpaceTaskDeadlineAlerts(space);
@@ -479,6 +569,7 @@ class SpacesScreenState extends State<SpacesScreen>
       dueDate: '${r.endDate.month}/${r.endDate.day}/${r.endDate.year}',
       members: List<String>.from(r.members),
       isCreator: true,
+      creatorName: AuthStore.instance.displayName,
       status: 'Not Started',
       statusColor: const Color(0xFFB0BAD3),
       accentColor: r.accentColor,
@@ -506,8 +597,7 @@ class SpacesScreenState extends State<SpacesScreen>
   ///
   /// notifySpaceTaskAssigned checks task.assignedTo.contains(currentUser),
   /// so any mismatch here causes false "you were assigned" notifications.
-  String _resolvedCurrentUser(Space space) =>
-      space.isCreator ? 'You (Creator)' : 'You';
+  String _resolvedCurrentUser(Space space) => AuthStore.instance.displayName;
 
   // ── Computed stats ─────────────────────────────────────────
   int get _inProgressCount =>

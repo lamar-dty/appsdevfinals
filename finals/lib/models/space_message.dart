@@ -24,4 +24,21 @@ class SpaceMessage {
         text: text,
         isSystemMessage: true,
       );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'sender': sender,
+        'text': text,
+        'timestamp': timestamp.millisecondsSinceEpoch,
+        'isSystemMessage': isSystemMessage,
+      };
+
+  factory SpaceMessage.fromJson(Map<String, dynamic> j) => SpaceMessage(
+        id: j['id'] as String,
+        sender: j['sender'] as String,
+        text: j['text'] as String,
+        timestamp:
+            DateTime.fromMillisecondsSinceEpoch(j['timestamp'] as int),
+        isSystemMessage: j['isSystemMessage'] as bool,
+      );
 }

@@ -9,6 +9,10 @@ class SpaceAttachment {
 
   SpaceAttachment({required this.name});
 
+  Map<String, dynamic> toJson() => {'name': name};
+  factory SpaceAttachment.fromJson(Map<String, dynamic> j) =>
+      SpaceAttachment(name: j['name'] as String);
+
   /// Infer a file-type category from the extension.
   String get type {
     final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
@@ -96,6 +100,26 @@ class SpaceTask {
     status      = _order[next];
     statusColor = colorFor(status);
   }
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'description': description,
+        'status': status,
+        'assignedTo': assignedTo,
+        'attachments': attachments.map((a) => a.toJson()).toList(),
+      };
+
+  factory SpaceTask.fromJson(Map<String, dynamic> j) => SpaceTask(
+        title: j['title'] as String,
+        description: j['description'] as String,
+        status: j['status'] as String,
+        statusColor: colorFor(j['status'] as String),
+        assignedTo: List<String>.from(j['assignedTo'] as List),
+        attachments: (j['attachments'] as List)
+            .map((e) =>
+                SpaceAttachment.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+      );
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -112,6 +136,10 @@ class Space {
 
   /// True when the current user created this space.
   final bool isCreator;
+
+  /// Display name of whoever created the space. Stored so non-creators
+  /// can show the real name instead of a generic "You (Creator)" label.
+  final String creatorName;
 
   String status;
   Color statusColor;
@@ -130,6 +158,7 @@ class Space {
     required this.dueDate,
     required this.members,
     required this.isCreator,
+    required this.creatorName,
     required this.status,
     required this.statusColor,
     required this.accentColor,
@@ -169,7 +198,7 @@ class Space {
     }
   }
 
-  /// Days remaining until [dueDate] (negative = overdue).
+  /// Days remaining until [dueDate] (negative = overdue).\
   int get daysLeft {
     try {
       final parts = dueDate.split('/');
@@ -183,4 +212,40 @@ class Space {
       return 0;
     }
   }
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'description': description,
+        'dateRange': dateRange,
+        'dueDate': dueDate,
+        'members': members,
+        'isCreator': isCreator,
+        'creatorName': creatorName,
+        'status': status,
+        'accentColor': accentColor.value,
+        'progress': progress,
+        'completedTasks': completedTasks,
+        'tasks': tasks.map((t) => t.toJson()).toList(),
+        'inviteCode': inviteCode,
+      };
+
+  factory Space.fromJson(Map<String, dynamic> j) => Space(
+        name: j['name'] as String,
+        description: j['description'] as String,
+        dateRange: j['dateRange'] as String,
+        dueDate: j['dueDate'] as String,
+        members: List<String>.from(j['members'] as List),
+        isCreator: j['isCreator'] as bool,
+        creatorName: j['creatorName'] as String? ?? 'Creator',
+        status: j['status'] as String,
+        statusColor: SpaceTask.colorFor(j['status'] as String),
+        accentColor: Color(j['accentColor'] as int),
+        progress: (j['progress'] as num).toDouble(),
+        completedTasks: j['completedTasks'] as int,
+        tasks: (j['tasks'] as List)
+            .map((e) =>
+                SpaceTask.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+        inviteCode: j['inviteCode'] as String,
+      );
 }

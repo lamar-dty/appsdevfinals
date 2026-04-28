@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../constants/colors.dart';
+import '../store/auth_store.dart';
 import 'login_screen.dart';
+import '../main.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -43,27 +45,35 @@ class _SignupScreenState extends State<SignupScreen>
     super.dispose();
   }
 
-  void _createAccount() {
-    final name = _nameController.text.trim();
+  Future<void> _createAccount() async {
+    final name  = _nameController.text.trim();
     final email = _emailController.text.trim();
-    final pass = _passController.text;
+    final pass  = _passController.text;
     if (name.isEmpty || email.isEmpty || pass.isEmpty) {
       setState(() => _error = 'Please fill in all fields.');
       return;
     }
+    final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+    if (!emailRegex.hasMatch(email)) {
+      setState(() => _error = 'Please enter a valid email address.');
+      return;
+    }
     setState(() { _loading = true; _error = null; });
-    // Simulate account creation then go to login
-    Future.delayed(const Duration(milliseconds: 800), () {
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          pageBuilder: (_, __, ___) => const LoginScreen(),
-          transitionsBuilder: (_, anim, __, child) =>
-              FadeTransition(opacity: anim, child: child),
-          transitionDuration: const Duration(milliseconds: 300),
-        ),
+    final err = await AuthStore.instance.signUp(
+      name: name,
+      email: email,
+      password: pass,
+    );
+    if (!mounted) return;
+    if (err != null) {
+      setState(() { _loading = false; _error = err; });
+    } else {
+      // Signed up and auto-logged in — go straight to main app.
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const MainScaffold()),
+        (route) => false,
       );
-    });
+    }
   }
 
   @override

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../constants/colors.dart';
 import '../../models/space.dart';
+import '../../store/space_store.dart';
 import 'space_painters.dart'; // SemiGaugePainter, DashedLinePainter
 
 // ─────────────────────────────────────────────────────────────
@@ -79,6 +80,7 @@ class _SelectedBackgroundState extends State<SelectedBackground> {
       space.description = trimmed.isEmpty ? 'No description.' : trimmed;
       _isEditingDesc = false;
     });
+    SpaceStore.instance.save();
   }
 
   @override
@@ -544,7 +546,9 @@ class _SelectedBackgroundState extends State<SelectedBackground> {
   runSpacing: 6,
   children: [
     MemberChip(
-      name: space.isCreator ? 'You (Creator)' : 'You',
+      name: space.isCreator
+          ? 'You (Creator)'
+          : '${space.creatorName} (Creator)',
       canKick: false,
       onKick: null,
     ),
@@ -1458,7 +1462,7 @@ else if (widget.space.isCreator)                          Row(
                           ),
                         ),
                         // Member chips
-...[widget.space.isCreator ? 'You (Creator)' : 'You', ...widget.space.members]                            .map((m) {
+...[widget.space.isCreator ? 'You (Creator)' : '${widget.space.creatorName} (Creator)', ...widget.space.members]                            .map((m) {
                           final isSelected = task.assignedTo.contains(m);
                           return GestureDetector(
                             onTap: widget.space.isCreator

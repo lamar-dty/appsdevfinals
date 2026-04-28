@@ -1,34 +1,86 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/space.dart';
 import '../models/space_message.dart';
-import 'task_store.dart'; // ← Step 3: fire chat notification into TaskStore
+import 'task_store.dart';
+import 'auth_store.dart';
+
+String get _kMessagesPrefix => AuthStore.instance.scopedKey('space_chat_msgs_');
+String get _kCursorsKey     => AuthStore.instance.scopedKey('space_chat_cursors');
 
 // ─────────────────────────────────────────────────────────────
 // SpaceChatStore
-// Holds messages keyed by space inviteCode (unique per space).
-// Tracks per-(space, user) read cursors for unread-dot logic.
 // ─────────────────────────────────────────────────────────────
 class SpaceChatStore extends ChangeNotifier {
   SpaceChatStore._();
   static final SpaceChatStore instance = SpaceChatStore._();
 
-  final Map<String, List<SpaceMessage>> _messages = {};
+  final Map<String, List<SpaceMessage>> _messages    = {};
+  final Map<String, int>                _readCursors = {};
 
-  // Key: "$spaceCode|$currentUser"  →  index up-to-and-including which message
-  // has been seen by that user. -1 means nothing has been read yet.
-  final Map<String, int> _readCursors = {};
+  // ── Initialisation ────────────────────────────────────────
+
+  Future<void> load(List<String> spaceCodes) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // Load messages for each known space
+    for (final code in spaceCodes) {
+      final raw = prefs.getString('${_kMessagesPrefix}$code');
+      if (raw != null) {
+        final list = jsonDecode(raw) as List;
+        _messages[code] = list
+            .map((e) =>
+                SpaceMessage.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList();
+      }
+    }
+
+    // Load read cursors
+    final rawCursors = prefs.getString(_kCursorsKey);
+    if (rawCursors != null) {
+      final map = jsonDecode(rawCursors) as Map<String, dynamic>;
+      map.forEach((k, v) => _readCursors[k] = v as int);
+    }
+
+    notifyListeners();
+  }
+
+  /// Clear in-memory state and reload for the current user.
+  Future<void> reload(List<String> spaceCodes) async {
+    _messages.clear();
+    _readCursors.clear();
+    await load(spaceCodes);
+  }
+
+  Future<void> _saveMessages(String spaceCode) async {
+    final prefs = await SharedPreferences.getInstance();
+    final msgs = _messages[spaceCode] ?? [];
+    await prefs.setString(
+      '${_kMessagesPrefix}$spaceCode',
+      jsonEncode(msgs.map((m) => m.toJson()).toList()),
+    );
+  }
+
+  Future<void> _saveCursors() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kCursorsKey, jsonEncode(_readCursors));
+  }
+
+  Future<void> deleteMessagesFor(String spaceCode) async {
+    _messages.remove(spaceCode);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('${_kMessagesPrefix}$spaceCode');
+    // Remove cursors for this space
+    _readCursors.removeWhere((k, _) => k.startsWith('$spaceCode|'));
+    await _saveCursors();
+  }
 
   // ── Messages ────────────────────────────────────────────────
 
   List<SpaceMessage> messagesFor(String spaceCode) =>
       _messages.putIfAbsent(spaceCode, () => []);
 
-  /// Adds a message to the store.
-  ///
-  /// When [space] and [currentUser] are provided the store will automatically
-  /// fire a [TaskStore] chat notification for messages sent by OTHER users
-  /// (non-system, not the current user). This keeps the notification centre
-  /// in sync without requiring call-sites to remember to do it manually.
   void addMessage(
     String spaceCode,
     SpaceMessage message, {
@@ -37,10 +89,6 @@ class SpaceChatStore extends ChangeNotifier {
   }) {
     messagesFor(spaceCode).add(message);
 
-    // Fire a chat notification when:
-    //   • A Space context was supplied (so we have name, accent colour, etc.)
-    //   • The message is not a system message
-    //   • The sender is not the current user
     if (space != null &&
         currentUser != null &&
         !message.isSystemMessage &&
@@ -53,9 +101,9 @@ class SpaceChatStore extends ChangeNotifier {
     }
 
     notifyListeners();
+    _saveMessages(spaceCode);
   }
 
-  /// Convenience wrapper for system messages (no notification generated).
   void addSystemMessage(String spaceCode, String text) {
     addMessage(spaceCode, SpaceMessage.system(text));
   }
@@ -65,24 +113,19 @@ class SpaceChatStore extends ChangeNotifier {
   String _cursorKey(String spaceCode, String currentUser) =>
       '$spaceCode|$currentUser';
 
-  /// Call this when the chat sheet is opened (or a message is sent by the
-  /// current user).  Advances the read cursor to the last message index so
-  /// nothing is counted as unread any more.
   void markAsRead(String spaceCode, String currentUser) {
-    final msgs = messagesFor(spaceCode);
-    final key = _cursorKey(spaceCode, currentUser);
+    final msgs     = messagesFor(spaceCode);
+    final key      = _cursorKey(spaceCode, currentUser);
     final lastIndex = msgs.length - 1;
-    // Only advance; never move the cursor backwards.
     if (lastIndex > (_readCursors[key] ?? -1)) {
       _readCursors[key] = lastIndex;
       notifyListeners();
+      _saveCursors();
     }
   }
 
-  /// Returns the number of messages sent by OTHER users (non-system) that
-  /// arrived after the current user's read cursor.
   int unreadCountFor(String spaceCode, String currentUser) {
-    final msgs = messagesFor(spaceCode);
+    final msgs   = messagesFor(spaceCode);
     final cursor = _readCursors[_cursorKey(spaceCode, currentUser)] ?? -1;
     var count = 0;
     for (var i = cursor + 1; i < msgs.length; i++) {

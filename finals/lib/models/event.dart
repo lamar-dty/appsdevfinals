@@ -92,4 +92,44 @@ class Event {
   }
 
   bool get hasTimeRange => startTime != null && endTime != null;
+
+  // ── Serialisation ─────────────────────────────────────────
+
+  static TimeOfDay? _todFromMap(Map<String, dynamic>? m) =>
+      m == null ? null : TimeOfDay(hour: m['h'] as int, minute: m['m'] as int);
+
+  static Map<String, int>? _todToMap(TimeOfDay? t) =>
+      t == null ? null : {'h': t.hour, 'm': t.minute};
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'category': category.index,
+        'startDate': startDate.millisecondsSinceEpoch,
+        'endDate': endDate.millisecondsSinceEpoch,
+        'startTime': _todToMap(startTime),
+        'endTime': _todToMap(endTime),
+        'location': location,
+        'notes': notes,
+        'createdAt': createdAt.millisecondsSinceEpoch,
+      };
+
+  factory Event.fromJson(Map<String, dynamic> j) => Event(
+        id: j['id'] as String,
+        title: j['title'] as String,
+        category: EventCategory.values[j['category'] as int],
+        startDate:
+            DateTime.fromMillisecondsSinceEpoch(j['startDate'] as int),
+        endDate: DateTime.fromMillisecondsSinceEpoch(j['endDate'] as int),
+        startTime: _todFromMap(j['startTime'] != null
+            ? Map<String, dynamic>.from(j['startTime'] as Map)
+            : null),
+        endTime: _todFromMap(j['endTime'] != null
+            ? Map<String, dynamic>.from(j['endTime'] as Map)
+            : null),
+        location: j['location'] as String?,
+        notes: j['notes'] as String?,
+        createdAt:
+            DateTime.fromMillisecondsSinceEpoch(j['createdAt'] as int),
+      );
 }

@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import '../constants/colors.dart';
+import '../store/auth_store.dart';
 import 'signup_screen.dart';
-
-// Hard-coded credentials
-const _kValidUser = 'user';
-const _kValidPass = 'user';
+import '../main.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -50,18 +48,23 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
-  void _login() {
+  Future<void> _login() async {
     final email = _emailController.text.trim();
-    final pass = _passController.text;
-    if (email == _kValidUser && pass == _kValidPass) {
-      setState(() { _loading = true; _error = null; });
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (!mounted) return;
-        // Navigate to main app
-        Navigator.of(context).pushReplacementNamed('/main');
-      });
+    final pass  = _passController.text;
+    if (email.isEmpty || pass.isEmpty) {
+      setState(() => _error = 'Please enter your email and password.');
+      return;
+    }
+    setState(() { _loading = true; _error = null; });
+    final err = await AuthStore.instance.login(email: email, password: pass);
+    if (!mounted) return;
+    if (err != null) {
+      setState(() { _loading = false; _error = err; });
     } else {
-      setState(() => _error = 'Invalid username or password.');
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const MainScaffold()),
+        (route) => false,
+      );
     }
   }
 

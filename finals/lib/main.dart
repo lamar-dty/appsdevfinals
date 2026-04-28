@@ -9,6 +9,10 @@ import 'screens/login_screen.dart';
 import 'widgets/app_drawer.dart';
 import 'widgets/dashboard_appbar.dart';
 import 'widgets/dashboard_bottom_nav.dart';
+import 'store/task_store.dart';
+import 'store/space_store.dart';
+import 'store/space_chat_store.dart';
+import 'store/auth_store.dart';
 
 class ScrollBehaviorNoGlow extends ScrollBehavior {
   const ScrollBehaviorNoGlow();
@@ -21,7 +25,37 @@ class ScrollBehaviorNoGlow extends ScrollBehavior {
       child;
 }
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Load auth first so we know if there's an active session.
+  await AuthStore.instance.load();
+
+  // Register callbacks so AuthStore can reload/clear stores on login & logout
+  // without creating a circular import.
+  AuthStore.instance.registerStoreCallbacks(
+    onLogin: () async {
+      await TaskStore.instance.reload();
+      await SpaceStore.instance.reload();
+      await SpaceChatStore.instance.reload(
+        SpaceStore.instance.spaces.map((s) => s.inviteCode).toList(),
+      );
+    },
+    onLogout: () async {
+      await TaskStore.instance.reload();
+      await SpaceStore.instance.reload();
+      await SpaceChatStore.instance.reload([]);
+    },
+  );
+
+  // Load persisted data before showing any UI.
+  await TaskStore.instance.load();
+  await SpaceStore.instance.load();
+  // Chat messages are keyed per space; load for all already-persisted spaces.
+  await SpaceChatStore.instance.load(
+    SpaceStore.instance.spaces.map((s) => s.inviteCode).toList(),
+  );
+
   runApp(const MyApp());
 }
 
