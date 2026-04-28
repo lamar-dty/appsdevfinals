@@ -58,14 +58,18 @@ class MainScaffold extends StatefulWidget {
 class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<SpacesScreenState> _spacesKey = GlobalKey<SpacesScreenState>();
 
   // ── Persisted calendar time range ────────────────────────
   int _calStartHour = 6;
   int _calEndHour   = 22;
 
+  late final List<Widget> _pages;
+
   @override
-  Widget build(BuildContext context) {
-    final pages = [
+  void initState() {
+    super.initState();
+    _pages = [
       const HomeScreen(),
       CalendarScreen(
         calStartHour: _calStartHour,
@@ -75,10 +79,13 @@ class _MainScaffoldState extends State<MainScaffold> {
           _calEndHour   = e;
         }),
       ),
-      const SpacesScreen(),
+      SpacesScreen(key: _spacesKey),
       const WalletScreen(),
     ];
+  }
 
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
       extendBody: true,
@@ -87,7 +94,10 @@ class _MainScaffoldState extends State<MainScaffold> {
         onMenuTap: () => _scaffoldKey.currentState?.openDrawer(),
       ),
       drawer: const AppDrawer(),
-      body: pages[_selectedIndex],
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: _pages,
+      ),
       bottomNavigationBar: MediaQuery(
         data: MediaQuery.of(context).copyWith(padding: EdgeInsets.zero),
         child: DashboardBottomNav(
@@ -97,6 +107,11 @@ class _MainScaffoldState extends State<MainScaffold> {
       ),
       floatingActionButton: DashboardFAB(
         onNavigateToCalendar: () => setState(() => _selectedIndex = 1),
+        onNavigateToSpaces: () => setState(() => _selectedIndex = 2),
+        onSpaceSaved: (result) {
+          _spacesKey.currentState?.addSpace(result);
+          setState(() => _selectedIndex = 2);
+        },
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
     );

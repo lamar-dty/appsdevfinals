@@ -3,6 +3,7 @@ import '../constants/colors.dart';
 import '../store/task_store.dart';
 import '../models/app_notification.dart';
 import '../widgets/notification_item.dart';
+import '../store/space_store.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -56,11 +57,14 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: TaskStore.instance,
-      builder: (context, _) {
+listenable: Listenable.merge([
+  TaskStore.instance,
+  SpaceStore.instance,
+]),      builder: (context, _) {
         final store = TaskStore.instance;
         final pct   = store.completionPercent;
         final total = store.total;
+        final spaces = SpaceStore.instance.spaces;
 
         return Stack(
           children: [
@@ -126,13 +130,15 @@ class _HomeScreenState extends State<HomeScreen> {
                           const SizedBox(height: 10),
                           Row(
                             children: [
-                              const _HomeStatCard(
-                                icon: Icons.group_rounded,
-                                iconColor: Color(0xFF7070D8),
-                                title: 'Active Spaces',
-                                value: '0',
-                                subtitle: 'No spaces yet',
-                              ),
+                              _HomeStatCard(
+  icon: Icons.group_rounded,
+  iconColor: const Color(0xFF7070D8),
+  title: 'Active Spaces',
+  value: '${spaces.length}',
+  subtitle: spaces.isEmpty
+      ? 'No spaces yet'
+      : '${spaces.where((s) => !s.isCompleted).length} active now',
+),
                               const SizedBox(width: 10),
                               const _HomeStatCard(
                                 icon: Icons.trending_up_rounded,

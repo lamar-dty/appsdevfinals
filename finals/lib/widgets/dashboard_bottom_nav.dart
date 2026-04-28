@@ -109,7 +109,9 @@ class _NavItem extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class DashboardFAB extends StatelessWidget {
   final VoidCallback? onNavigateToCalendar;
-  const DashboardFAB({super.key, this.onNavigateToCalendar});
+  final VoidCallback? onNavigateToSpaces;
+  final void Function(SpaceResult)? onSpaceSaved;
+  const DashboardFAB({super.key, this.onNavigateToCalendar, this.onNavigateToSpaces, this.onSpaceSaved});
 
   @override
   Widget build(BuildContext context) {
@@ -126,7 +128,7 @@ class DashboardFAB extends StatelessWidget {
             context: context,
             backgroundColor: Colors.transparent,
             isScrollControlled: true,
-            builder: (_) => _AddMenuSheet(onNavigateToCalendar: onNavigateToCalendar),
+            builder: (_) => _AddMenuSheet(onNavigateToCalendar: onNavigateToCalendar, onNavigateToSpaces: onNavigateToSpaces, onSpaceSaved: onSpaceSaved),
           );
         },
         backgroundColor: Colors.transparent,
@@ -143,7 +145,9 @@ class DashboardFAB extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _AddMenuSheet extends StatefulWidget {
   final VoidCallback? onNavigateToCalendar;
-  const _AddMenuSheet({this.onNavigateToCalendar});
+  final VoidCallback? onNavigateToSpaces;
+  final void Function(SpaceResult)? onSpaceSaved;
+  const _AddMenuSheet({this.onNavigateToCalendar, this.onNavigateToSpaces, this.onSpaceSaved});
   @override
   State<_AddMenuSheet> createState() => _AddMenuSheetState();
 }
@@ -303,7 +307,10 @@ class _AddMenuSheetState extends State<_AddMenuSheet>
                             } else if (i == 2) {
                               // Create Space
                               WidgetsBinding.instance.addPostFrameCallback((_) {
-                                showCreateSpaceSheet(context);
+                                showCreateSpaceSheet(context, onSaved: (result) {
+                                  widget.onSpaceSaved?.call(result);
+                                  widget.onNavigateToSpaces?.call();
+                                });
                               });
                             }
                           },

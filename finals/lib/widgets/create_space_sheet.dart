@@ -2,15 +2,44 @@ import 'package:flutter/material.dart';
 import '../constants/colors.dart';
 
 // ─────────────────────────────────────────────────────────────
+// Result model (returned to caller)
+// ─────────────────────────────────────────────────────────────
+class SpaceResult {
+  final String name;
+  final String description;
+  final Color accentColor;
+  final DateTime startDate;
+  final DateTime endDate;
+  final TimeOfDay? startTime;
+  final TimeOfDay? endTime;
+  final List<String> members;
+  final List<String> checklistTitles;
+  final List<String> checklistNotes;
+
+  const SpaceResult({
+    required this.name,
+    required this.description,
+    required this.accentColor,
+    required this.startDate,
+    required this.endDate,
+    this.startTime,
+    this.endTime,
+    required this.members,
+    required this.checklistTitles,
+    this.checklistNotes = const [],
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
 // Entry point
 // ─────────────────────────────────────────────────────────────
-void showCreateSpaceSheet(BuildContext context) {
+void showCreateSpaceSheet(BuildContext context, {void Function(SpaceResult)? onSaved}) {
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     enableDrag: true,
-    builder: (_) => const CreateSpaceSheet(),
+    builder: (_) => CreateSpaceSheet(onSaved: onSaved),
   );
 }
 
@@ -35,7 +64,8 @@ class _ChecklistItem {
 // Sheet
 // ─────────────────────────────────────────────────────────────
 class CreateSpaceSheet extends StatefulWidget {
-  const CreateSpaceSheet({super.key});
+  final void Function(SpaceResult)? onSaved;
+  const CreateSpaceSheet({super.key, this.onSaved});
   @override
   State<CreateSpaceSheet> createState() => _CreateSpaceSheetState();
 }
@@ -690,23 +720,20 @@ class _CreateSpaceSheetState extends State<CreateSpaceSheet>
                                 child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    GestureDetector(
-                                      onTap: () => setState(() => item.done = !item.done),
-                                      child: AnimatedContainer(
-                                        duration: const Duration(milliseconds: 150),
-                                        width: 22, height: 22,
-                                        margin: const EdgeInsets.only(top: 1),
-                                        decoration: BoxDecoration(
-                                          color: item.done ? _accent : Colors.transparent,
-                                          borderRadius: BorderRadius.circular(6),
-                                          border: Border.all(
-                                            color: item.done ? _accent : kWhite.withOpacity(0.25),
-                                            width: 1.5,
-                                          ),
+                                    Container(
+                                      width: 22, height: 22,
+                                      margin: const EdgeInsets.only(top: 1),
+                                      decoration: BoxDecoration(
+                                        color: _accent.withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Text('${i + 1}',
+                                        style: TextStyle(
+                                          color: _accent,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
                                         ),
-                                        child: item.done
-                                            ? const Icon(Icons.check_rounded, color: Colors.white, size: 14)
-                                            : null,
                                       ),
                                     ),
                                     const SizedBox(width: 10),
@@ -715,12 +742,10 @@ class _CreateSpaceSheetState extends State<CreateSpaceSheet>
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
                                           Text(item.title,
-                                            style: TextStyle(
-                                              color: item.done ? kWhite.withOpacity(0.4) : kWhite,
+                                            style: const TextStyle(
+                                              color: kWhite,
                                               fontSize: 13,
                                               fontWeight: FontWeight.w600,
-                                              decoration: item.done ? TextDecoration.lineThrough : null,
-                                              decorationColor: kWhite.withOpacity(0.4),
                                             ),
                                           ),
                                           if (item.note != null) ...[
@@ -773,7 +798,23 @@ class _CreateSpaceSheetState extends State<CreateSpaceSheet>
                   color: Colors.transparent,
                   child: InkWell(
                     borderRadius: BorderRadius.circular(14),
-                    onTap: () => Navigator.pop(context),
+                    onTap: () {
+                      if (_nameCtrl.text.trim().isEmpty) return;
+                      final result = SpaceResult(
+                        name:            _nameCtrl.text.trim(),
+                        description:     _descCtrl.text.trim(),
+                        accentColor:     _accent,
+                        startDate:       _startDate,
+                        endDate:         _endDate,
+                        startTime:       _startTime,
+                        endTime:         _endTime,
+                        members:         List.from(_members),
+                        checklistTitles: _checklist.map((c) => c.title).toList(),
+                        checklistNotes:  _checklist.map((c) => c.note ?? '').toList(),
+                      );
+                      Navigator.pop(context);
+                      widget.onSaved?.call(result);
+                    },
                     child: const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
