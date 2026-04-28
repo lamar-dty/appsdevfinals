@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/task.dart';
 import '../models/event.dart';
 import '../models/app_notification.dart';
+import '../models/space.dart';
 
 class TaskStore extends ChangeNotifier {
   TaskStore._();
@@ -151,6 +152,302 @@ class TaskStore extends ChangeNotifier {
     }
   }
 
+  // ═════════════════════════════════════════════════════════
+  // SPACE NOTIFICATIONS — public API
+  // Each method is called from SpacesScreen / SpaceChatStore
+  // at the relevant action site. They are all no-ops if a
+  // matching notification already exists (dedup guard).
+  // ═════════════════════════════════════════════════════════
+
+  /// Space was created by the current user.
+  void notifySpaceCreated(Space space) {
+    _addSpaceNotif(_buildSpaceCreated(space));
+  }
+
+  /// Current user joined a space via invite code.
+  void notifySpaceJoined(Space space) {
+    _addSpaceNotif(_buildSpaceJoined(space));
+  }
+
+  /// A member was removed from a space (kicked).
+  void notifyMemberRemoved(Space space, String member) {
+    _addSpaceNotif(_buildMemberRemoved(space, member));
+  }
+
+  /// A new chat message arrived from [senderName] (not the current user).
+  /// Only generates a notification — unread dot logic stays in SpaceChatStore.
+  void notifyNewChatMessage(Space space, String senderName, String preview) {
+    // Dedup: only one "new message" notif per space at a time.
+    // When the user opens the chat the caller should call
+    // clearChatNotificationsFor() to reset.
+    final id = _chatNotifId(space.inviteCode);
+    if (_notifications.any((n) => n.id == id)) return;
+    _addSpaceNotif(_buildChatMessage(space, senderName, preview, id));
+  }
+
+  /// Clears any pending chat-message notification for [spaceInviteCode].
+  /// Call this from SpaceChatSheet.initState() alongside markAsRead().
+  void clearChatNotificationsFor(String spaceInviteCode) {
+    final id = _chatNotifId(spaceInviteCode);
+    final hadAny = _notifications.any((n) => n.id == id);
+    if (hadAny) {
+      _notifications.removeWhere((n) => n.id == id);
+      notifyListeners();
+    }
+  }
+
+  /// A new task was added to a space.
+  void notifySpaceTaskAdded(Space space, SpaceTask task) {
+    _addSpaceNotif(_buildSpaceTaskAdded(space, task));
+  }
+
+  /// The current user was assigned to a space task.
+  void notifySpaceTaskAssigned(
+      Space space, SpaceTask task, String currentUser) {
+    if (!task.assignedTo.contains(currentUser)) return;
+    _addSpaceNotif(_buildSpaceTaskAssigned(space, task));
+  }
+
+  /// A space task's status changed (not completed — use notifySpaceTaskCompleted
+  /// for that).
+  void notifySpaceTaskStatusChanged(Space space, SpaceTask task) {
+    if (task.status == 'Completed') return; // handled separately
+    // Always replace the previous status notif for this task so the card
+    // reflects the latest status rather than silently deduping the old one.
+    final id = 'space_task_status_${space.inviteCode}_${task.title}';
+    _notifications.removeWhere((n) => n.id == id);
+    _addSpaceNotif(_buildSpaceTaskStatus(space, task));
+  }
+
+  /// A space task was marked as completed.
+  void notifySpaceTaskCompleted(Space space, SpaceTask task) {
+    // Remove ALL prior notifs for this task (status, overdue, due-soon, and
+    // any previous done card) so re-completing after uncompleting doesn't
+    // leave a stale completed card alongside the new one.
+    _notifications.removeWhere((n) =>
+        n.spaceInviteCode == space.inviteCode &&
+        n.title == task.title &&
+        (n.type == NotificationType.spaceTaskStatus ||
+            n.type == NotificationType.spaceTaskOverdue ||
+            n.type == NotificationType.spaceTaskDueSoon ||
+            n.type == NotificationType.spaceTaskCompleted));
+    _addSpaceNotif(_buildSpaceTaskCompleted(space, task));
+  }
+
+  /// Removes every notification that belongs to [spaceInviteCode].
+  /// Call this when the user deletes or leaves a space so the notification
+  /// centre doesn't show orphaned cards.
+  void clearSpaceNotifications(String spaceInviteCode) {
+    final hadAny =
+        _notifications.any((n) => n.spaceInviteCode == spaceInviteCode);
+    if (hadAny) {
+      _notifications
+          .removeWhere((n) => n.spaceInviteCode == spaceInviteCode);
+      notifyListeners();
+    }
+  }
+
+  /// Call once when a space is added (created or joined) to schedule
+  /// due-soon and overdue alerts for its existing tasks.
+  void generateSpaceTaskDeadlineAlerts(Space space) {
+    for (final task in space.tasks) {
+      if (task.status == 'Completed') continue;
+      _maybeAddDeadlineAlert(space, task);
+    }
+    // notifyListeners called inside _addSpaceNotif if anything was added.
+  }
+
+  /// Call when a new task is added to an existing space, or when a task's
+  /// status changes, to refresh deadline alerts for that specific task.
+  void refreshDeadlineAlertFor(Space space, SpaceTask task) {
+    // Remove stale alerts for this task first.
+    _notifications.removeWhere((n) =>
+        n.spaceInviteCode == space.inviteCode &&
+        n.title == task.title &&
+        (n.type == NotificationType.spaceTaskDueSoon ||
+            n.type == NotificationType.spaceTaskOverdue));
+    if (task.status != 'Completed') {
+      _maybeAddDeadlineAlert(space, task);
+    }
+  }
+
+  // ── Space notification internals ──────────────────────────
+
+  /// Dedup-safe inserter for space notifications.
+  /// Skips silently if a notification with the same id already exists.
+  void _addSpaceNotif(AppNotification notif) {
+    if (_notifications.any((n) => n.id == notif.id)) return;
+    _notifications.insert(0, notif);
+    notifyListeners();
+  }
+
+  String _chatNotifId(String inviteCode) => 'space_chat_$inviteCode';
+
+  void _maybeAddDeadlineAlert(Space space, SpaceTask task) {
+    final now   = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // Parse the space's dueDate ("M/D/YYYY") as a proxy for individual
+    // task deadlines when tasks don't carry their own due date.
+    // When your SpaceTask model gains a dueDate field, swap this in.
+    DateTime? due;
+    try {
+      final parts = space.dueDate.split('/');
+      due = DateTime(
+        int.parse(parts[2]),
+        int.parse(parts[0]),
+        int.parse(parts[1]),
+      );
+    } catch (_) {
+      return;
+    }
+
+    final dueDay = DateTime(due.year, due.month, due.day);
+    final days = dueDay.difference(today).inDays;
+
+    if (dueDay.isBefore(today)) {
+      _addSpaceNotif(_buildSpaceTaskOverdue(space, task));
+    } else if (days == 1) {
+      _addSpaceNotif(_buildSpaceTaskDueSoon(space, task));
+    }
+  }
+
+  // ── Space notification builders ───────────────────────────
+
+  AppNotification _buildSpaceCreated(Space space) => AppNotification(
+        id: 'space_created_${space.inviteCode}',
+        type: NotificationType.spaceCreated,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: space.name,
+        subtitle: 'Space created 🚀',
+        detail: 'You created "${space.name}". '
+            'Share the invite code ${space.inviteCode} with your team.',
+      );
+
+  AppNotification _buildSpaceJoined(Space space) => AppNotification(
+        id: 'space_joined_${space.inviteCode}',
+        type: NotificationType.spaceJoined,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: space.name,
+        subtitle: 'You joined a space 👋',
+        detail: 'Welcome to "${space.name}". '
+            'You can see tasks, chat with members, and track progress here.',
+      );
+
+  AppNotification _buildMemberRemoved(Space space, String member) =>
+      AppNotification(
+        // Use member name in id so each kick gets its own notif.
+        id: 'space_kick_${space.inviteCode}_$member',
+        type: NotificationType.spaceMemberRemoved,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: space.name,
+        subtitle: 'Member removed',
+        detail: '$member was removed from "${space.name}".',
+      );
+
+  AppNotification _buildChatMessage(
+    Space space,
+    String sender,
+    String preview,
+    String id,
+  ) =>
+      AppNotification(
+        id: id,
+        type: NotificationType.spaceChatMessage,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: space.name,
+        subtitle: '$sender sent a message 💬',
+        detail: preview.length > 80
+            ? '${preview.substring(0, 80)}…'
+            : preview,
+      );
+
+  AppNotification _buildSpaceTaskAdded(Space space, SpaceTask task) =>
+      AppNotification(
+        id: 'space_task_added_${space.inviteCode}_${task.title}',
+        type: NotificationType.spaceTaskAdded,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: space.name,
+        subtitle: 'New task added',
+        detail: '"${task.title}" was added to "${space.name}".',
+      );
+
+  AppNotification _buildSpaceTaskAssigned(Space space, SpaceTask task) =>
+      AppNotification(
+        id: 'space_task_assigned_${space.inviteCode}_${task.title}',
+        type: NotificationType.spaceTaskAssigned,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: task.title,
+        subtitle: 'You were assigned a task 📌',
+        detail: 'You\'ve been assigned "${task.title}" in "${space.name}".',
+      );
+
+  AppNotification _buildSpaceTaskStatus(Space space, SpaceTask task) =>
+      AppNotification(
+        // Always the same id per task so repeated status cycles replace each other.
+        id: 'space_task_status_${space.inviteCode}_${task.title}',
+        type: NotificationType.spaceTaskStatus,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: task.title,
+        subtitle: 'Task status updated',
+        detail: '"${task.title}" is now ${task.status} in "${space.name}".',
+      );
+
+  AppNotification _buildSpaceTaskCompleted(Space space, SpaceTask task) =>
+      AppNotification(
+        id: 'space_task_done_${space.inviteCode}_${task.title}',
+        type: NotificationType.spaceTaskCompleted,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: task.title,
+        subtitle: 'Task completed 🎉',
+        detail: '"${task.title}" was completed in "${space.name}". Great work!',
+      );
+
+  AppNotification _buildSpaceTaskDueSoon(Space space, SpaceTask task) =>
+      AppNotification(
+        id: 'space_task_due_soon_${space.inviteCode}_${task.title}',
+        type: NotificationType.spaceTaskDueSoon,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: task.title,
+        subtitle: '⏰ Due tomorrow — ${space.name}',
+        detail: '"${task.title}" in "${space.name}" is due tomorrow. '
+            'Make sure it\'s on track.',
+      );
+
+  AppNotification _buildSpaceTaskOverdue(Space space, SpaceTask task) =>
+      AppNotification(
+        id: 'space_task_overdue_${space.inviteCode}_${task.title}',
+        type: NotificationType.spaceTaskOverdue,
+        sourceId: space.inviteCode,
+        spaceInviteCode: space.inviteCode,
+        spaceAccentColor: space.accentColor,
+        title: task.title,
+        subtitle: '🔴 Overdue — ${space.name}',
+        detail: '"${task.title}" in "${space.name}" is past its deadline.',
+      );
+
+  // ═════════════════════════════════════════════════════════
+  // EXISTING task / event internals — unchanged below
+  // ═════════════════════════════════════════════════════════
+
   // ── Task notification generation ──────────────────────────
 
   void _generateTaskNotifications(Task task) {
@@ -267,7 +564,7 @@ class TaskStore extends ChangeNotifier {
     }
   }
 
-  // ── Notification inserter ─────────────────────────────────
+  // ── Notification inserter (task/event) ────────────────────
   void _addNotification(AppNotification notif) {
     _notifications.insert(0, notif);
   }

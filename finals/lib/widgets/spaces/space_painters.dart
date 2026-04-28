@@ -200,8 +200,7 @@ class EmptyTasksPlaceholder extends StatelessWidget {
   }
 }
 
-class SpaceChatFab extends StatelessWidget {
-  const SpaceChatFab({super.key});
+
 
   @override
   Widget build(BuildContext context) {
@@ -221,4 +220,3 @@ class SpaceChatFab extends StatelessWidget {
       child: const Icon(Icons.chat_bubble_rounded, color: kWhite, size: 22),
     );
   }
-}

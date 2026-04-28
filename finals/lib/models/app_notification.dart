@@ -12,13 +12,25 @@ enum NotificationType {
   // ── Event ─────────────────────────────
   eventReminder,  // created / advance reminder
   eventToday,     // happening today
+
+  // ── Space ─────────────────────────────
+  spaceCreated,       // user created a new space
+  spaceJoined,        // user joined a space
+  spaceMemberRemoved, // a member was kicked
+  spaceChatMessage,   // new chat message from another member
+  spaceTaskAdded,     // a new task was added to a space
+  spaceTaskAssigned,  // current user was assigned to a task
+  spaceTaskStatus,    // a task's status changed
+  spaceTaskCompleted, // a task was marked completed
+  spaceTaskDueSoon,   // a space task is due tomorrow
+  spaceTaskOverdue,   // a space task is overdue
 }
 
 class AppNotification {
   final String id;
   final NotificationType type;
 
-  /// ID of the linked task OR event — used for grouping / deletion.
+  /// ID of the linked task, event, OR space — used for grouping / deletion.
   final String sourceId;
 
   final String title;
@@ -26,12 +38,19 @@ class AppNotification {
   final String detail;
   final DateTime createdAt;
 
-  // Task-specific (null for event notifications)
+  // Task-specific (null for event / space notifications)
   final TaskCategory? taskCategory;
   final TaskPriority? priority;
 
-  // Event-specific (null for task notifications)
+  // Event-specific (null for task / space notifications)
   final EventCategory? eventCategory;
+
+  // Space-specific (null for task / event notifications)
+  /// The invite code of the related space — used for routing / dedup.
+  final String? spaceInviteCode;
+
+  /// Accent colour of the space, used for icon tinting.
+  final Color? spaceAccentColor;
 
   bool isRead;
 
@@ -45,6 +64,8 @@ class AppNotification {
     this.taskCategory,
     this.priority,
     this.eventCategory,
+    this.spaceInviteCode,
+    this.spaceAccentColor,
     DateTime? createdAt,
     this.isRead = false,
   }) : createdAt = createdAt ?? DateTime.now();
@@ -52,20 +73,38 @@ class AppNotification {
   // ── Icon ──────────────────────────────────────────────────
   IconData get icon {
     switch (type) {
+      // Task
       case NotificationType.taskReminder:  return Icons.assignment_outlined;
       case NotificationType.taskOverdue:   return Icons.warning_amber_rounded;
       case NotificationType.taskDueToday:  return Icons.today_rounded;
       case NotificationType.taskCompleted: return Icons.check_circle_rounded;
+      // Event
       case NotificationType.eventReminder: return Icons.event_outlined;
       case NotificationType.eventToday:    return Icons.event_available_rounded;
+      // Space
+      case NotificationType.spaceCreated:       return Icons.rocket_launch_rounded;
+      case NotificationType.spaceJoined:        return Icons.login_rounded;
+      case NotificationType.spaceMemberRemoved: return Icons.person_remove_rounded;
+      case NotificationType.spaceChatMessage:   return Icons.chat_rounded;
+      case NotificationType.spaceTaskAdded:     return Icons.playlist_add_rounded;
+      case NotificationType.spaceTaskAssigned:  return Icons.person_pin_rounded;
+      case NotificationType.spaceTaskStatus:    return Icons.sync_rounded;
+      case NotificationType.spaceTaskCompleted: return Icons.task_alt_rounded;
+      case NotificationType.spaceTaskDueSoon:   return Icons.schedule_rounded;
+      case NotificationType.spaceTaskOverdue:   return Icons.warning_amber_rounded;
     }
   }
 
   // ── Colour helpers ────────────────────────────────────────
   Color get iconColor {
+    // Space notifications use the space accent colour when available.
+    if (spaceAccentColor != null) return spaceAccentColor!;
     if (eventCategory != null) return eventCategory!.color;
     return taskCategory?.color ?? const Color(0xFF9B88E8);
   }
 
   Color get iconBgColor => iconColor.withOpacity(0.15);
+
+  // ── Convenience: is this a space notification? ────────────
+  bool get isSpaceNotification => spaceInviteCode != null;
 }

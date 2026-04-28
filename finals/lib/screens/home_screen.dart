@@ -19,37 +19,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   late DraggableScrollableController _sheetController;
 
-  // Track whether the sheet has been opened past the peek level so we only
-  // mark notifications read once the user actually views them.
-  bool _hasMarkedReadThisSession = false;
-
   @override
   void initState() {
     super.initState();
     _sheetController = DraggableScrollableController();
-    _sheetController.addListener(_onSheetChanged);
-    // Do NOT mark as read here — the red dot should persist until the
-    // user actually opens the notification sheet.
-  }
-
-  void _onSheetChanged() {
-    if (!_sheetController.isAttached) return;
-    // Mark all read only once the user drags the sheet past the peek level
-    if (_sheetController.size > _snapPeek && !_hasMarkedReadThisSession) {
-      _hasMarkedReadThisSession = true;
-      TaskStore.instance.markAllNotificationsRead();
-    }
-    // Reset the flag when the sheet collapses back to peek so that NEW
-    // notifications that arrive while the sheet is closed will show the
-    // red dot again and get marked read on the next open.
-    if (_sheetController.size <= _snapPeek) {
-      _hasMarkedReadThisSession = false;
-    }
   }
 
   @override
   void dispose() {
-    _sheetController.removeListener(_onSheetChanged);
     _sheetController.dispose();
     super.dispose();
   }
@@ -133,7 +110,7 @@ listenable: Listenable.merge([
                               _HomeStatCard(
   icon: Icons.group_rounded,
   iconColor: const Color(0xFF7070D8),
-  title: 'Active Spaces',
+  title: 'Spaces',
   value: '${spaces.length}',
   subtitle: spaces.isEmpty
       ? 'No spaces yet'
@@ -300,12 +277,27 @@ class _NotificationSheetState extends State<_NotificationSheet> {
       case _SortBy.type:
         int rank(NotificationType t) {
           switch (t) {
-            case NotificationType.taskOverdue:   return 0;
-            case NotificationType.taskDueToday:  return 1;
-            case NotificationType.taskReminder:  return 2;
-            case NotificationType.taskCompleted: return 3;
-            case NotificationType.eventToday:    return 4;
-            case NotificationType.eventReminder: return 5;
+            // Task
+            case NotificationType.taskOverdue:        return 0;
+            case NotificationType.taskDueToday:       return 1;
+            case NotificationType.taskReminder:       return 2;
+            case NotificationType.taskCompleted:      return 3;
+            // Event
+            case NotificationType.eventToday:         return 4;
+            case NotificationType.eventReminder:      return 5;
+            // Space - urgent
+            case NotificationType.spaceTaskOverdue:   return 6;
+            case NotificationType.spaceTaskDueSoon:   return 7;
+            case NotificationType.spaceTaskAssigned:  return 8;
+            // Space - activity
+            case NotificationType.spaceChatMessage:   return 9;
+            case NotificationType.spaceTaskStatus:    return 10;
+            case NotificationType.spaceTaskCompleted: return 11;
+            case NotificationType.spaceTaskAdded:     return 12;
+            // Space - membership
+            case NotificationType.spaceMemberRemoved: return 13;
+            case NotificationType.spaceJoined:        return 14;
+            case NotificationType.spaceCreated:       return 15;
           }
         }
         list.sort((a, b) => rank(a.type).compareTo(rank(b.type)));
