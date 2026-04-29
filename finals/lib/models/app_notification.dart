@@ -25,6 +25,7 @@ enum NotificationType {
   spaceTaskCompleted, // a task was marked completed
   spaceTaskDueSoon,   // a space task is due tomorrow
   spaceTaskOverdue,   // a space task is overdue
+  spaceDeleted,       // the space was deleted by its creator
 }
 
 class AppNotification {
@@ -94,6 +95,7 @@ class AppNotification {
       case NotificationType.spaceTaskCompleted: return Icons.task_alt_rounded;
       case NotificationType.spaceTaskDueSoon:   return Icons.schedule_rounded;
       case NotificationType.spaceTaskOverdue:   return Icons.warning_amber_rounded;
+      case NotificationType.spaceDeleted:        return Icons.delete_forever_rounded;
     }
   }
 

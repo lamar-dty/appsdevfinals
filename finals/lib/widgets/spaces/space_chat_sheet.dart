@@ -61,17 +61,16 @@ class _SpaceChatSheetState extends State<SpaceChatSheet>
     _fadeAnim = CurvedAnimation(parent: _entryAnim, curve: Curves.easeOut);
     _entryAnim.forward();
 
-    // Mark all existing messages as read the moment the sheet opens.
-    SpaceChatStore.instance
-        .markAsRead(widget.space.inviteCode, widget.currentUser);
-
-    // Clear any pending "new message" notification for this space so the
-    // notification centre stays in sync with the user's read state.
-    TaskStore.instance
-        .clearChatNotificationsFor(widget.space.inviteCode);
-
-    // Scroll to bottom after first frame.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    // Scroll to bottom, mark all messages as read, and clear the home
+    // notification badge — all after the first frame so the message list
+    // is fully built and the cursor advances against the real message count.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom();
+      SpaceChatStore.instance
+          .markAsRead(widget.space.inviteCode, widget.currentUser);
+      TaskStore.instance
+          .clearChatNotificationsFor(widget.space.inviteCode);
+    });
   }
 
   @override
@@ -96,17 +95,18 @@ class _SpaceChatSheetState extends State<SpaceChatSheet>
     }
   }
 
-  void _sendMessage() {
+  Future<void> _sendMessage() async {
     final text = _input.text.trim();
     if (text.isEmpty) return;
     HapticFeedback.lightImpact();
     _input.clear();
-    setState(() {
-      SpaceChatStore.instance.addMessage(
-        widget.space.inviteCode,
-        SpaceMessage(sender: widget.currentUser, text: text),
-      );
-    });
+    await SpaceChatStore.instance.addMessage(
+      widget.space.inviteCode,
+      SpaceMessage(sender: widget.currentUser, text: text),
+      space: widget.space,
+      currentUser: widget.currentUser,
+    );
+    setState(() {});
     // Own messages are immediately read — advance the cursor.
     SpaceChatStore.instance
         .markAsRead(widget.space.inviteCode, widget.currentUser);

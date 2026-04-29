@@ -136,7 +136,12 @@ class _MainScaffoldState extends State<MainScaffold> {
         data: MediaQuery.of(context).copyWith(padding: EdgeInsets.zero),
         child: DashboardBottomNav(
           selectedIndex: _selectedIndex,
-          onTap: (i) => setState(() => _selectedIndex = i),
+          onTap: (i) {
+            setState(() => _selectedIndex = i);
+            // Drain cross-user notifications every time the home tab is opened
+            // so chat message notifications appear immediately.
+            if (i == 0) TaskStore.instance.drainSharedInbox();
+          },
         ),
       ),
       floatingActionButton: DashboardFAB(

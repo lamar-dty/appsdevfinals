@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import '../../constants/colors.dart';
 import '../../models/space.dart';
 import '../../store/space_store.dart';
+import '../../store/auth_store.dart';
 import 'space_painters.dart'; // SemiGaugePainter, DashedLinePainter
 
 // ─────────────────────────────────────────────────────────────
@@ -1000,6 +1001,19 @@ class _InviteCodeRowState extends State<InviteCodeRow> {
 // ─────────────────────────────────────────────────────────────
 // Task Detail Sheet
 // ─────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────
+// Permission model for TaskDetailSheet
+//
+// Centralises all edit-gating logic in one place so individual
+// widgets never re-implement the same isCreator checks.
+//
+//  creator        → all actions
+//  assignedMember → cycle status + add/remove attachments only
+//  viewer         → read-only
+// ─────────────────────────────────────────────────────────────
+enum TaskPermission { creator, assignedMember, viewer }
+
 class TaskDetailSheet extends StatefulWidget {
   final SpaceTask task;
   final Space space;
@@ -1010,6 +1024,9 @@ class TaskDetailSheet extends StatefulWidget {
   final void Function(String notes) onUpdateNotes;
   final void Function(String title) onUpdateTitle;
   final VoidCallback onDelete;
+  /// Raw display name of the currently logged-in user.
+  /// Used to compute [TaskPermission] — never a sentinel string.
+  final String currentUser;
 
   const TaskDetailSheet({
     super.key,
@@ -1022,6 +1039,7 @@ class TaskDetailSheet extends StatefulWidget {
     required this.onUpdateNotes,
     required this.onUpdateTitle,
     required this.onDelete,
+    required this.currentUser,
   });
 
   @override
@@ -1035,6 +1053,44 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
   late final TextEditingController _titleController;
   bool _isEditingNotes = false;
   bool _isEditingTitle = false;
+
+  /// Single source of truth for what the current user can do in this task.
+  ///
+  /// Computed lazily from [widget.space] and [widget.currentUser]:
+  ///  - creator        → space.isCreator flag (set at join/create time)
+  ///  - assignedMember → current user appears in task.assignedTo
+  ///                     (raw name or with "(Creator)" suffix)
+  ///  - viewer         → everyone else
+  ///
+  /// Uses a getter (not cached field) so it reacts to task.assignedTo
+  /// mutations that happen while the sheet is open.
+  TaskPermission get _permission {
+    if (widget.space.isCreator) return TaskPermission.creator;
+    final me = widget.currentUser; // raw displayName — never a sentinel
+    final assigned = widget.task.assignedTo;
+
+    // Only match the current user's real display name, or the name with the
+    // "(Creator)" suffix the assignment picker appends for the creator slot.
+    // We deliberately do NOT match bare 'You' / 'You (Creator)' sentinels
+    // here — those are creator-side UI labels that may have been persisted
+    // in assignedTo by an older build.  Matching them would grant
+    // assignedMember rights to every non-creator user on any task where the
+    // creator assigned themselves, which is a security / UX bug.
+    final isAssigned = assigned.contains(me) ||
+        assigned.contains('$me (Creator)');
+    if (isAssigned) return TaskPermission.assignedMember;
+    return TaskPermission.viewer;
+  }
+
+  bool get _canCycleStatus =>
+      _permission == TaskPermission.creator ||
+      _permission == TaskPermission.assignedMember;
+
+  bool get _canManageAttachments =>
+      _permission == TaskPermission.creator ||
+      _permission == TaskPermission.assignedMember;
+
+  bool get _canEditStructure => _permission == TaskPermission.creator;
 
   @override
   void initState() {
@@ -1142,7 +1198,7 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                                 )
                               else
                                 GestureDetector(
-  onTap: widget.space.isCreator
+  onTap: _canEditStructure
       ? () => setState(() => _isEditingTitle = true)
       : null,
                                   child: Row(
@@ -1159,7 +1215,7 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                                           ),
                                         ),
                                       ),
-                                      if (widget.space.isCreator) ...[
+                                      if (_canEditStructure) ...[
   const SizedBox(width: 6),
   Icon(
     Icons.edit_rounded,
@@ -1239,7 +1295,7 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                         const SizedBox(width: 12),
                         // Status badge: status icon + text + swap icon
                         GestureDetector(
-  onTap: widget.space.isCreator
+  onTap: _canCycleStatus
       ? () {
           widget.onCycleStatus();
           setState(() {});
@@ -1294,7 +1350,7 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const _SectionLabel(label: 'Notes'),
-if (!_isEditingNotes && widget.space.isCreator)                          GestureDetector(
+if (!_isEditingNotes && _canEditStructure)                          GestureDetector(
                             onTap: () => setState(() => _isEditingNotes = true),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
@@ -1322,7 +1378,7 @@ if (!_isEditingNotes && widget.space.isCreator)                          Gesture
                               ),
                             ),
                           )
-else if (widget.space.isCreator)                          Row(
+else if (_canEditStructure)                          Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               GestureDetector(
@@ -1431,7 +1487,7 @@ else if (widget.space.isCreator)                          Row(
                       children: [
                         // Unassigned chip to clear
                         GestureDetector(
-                          onTap: widget.space.isCreator
+                          onTap: _canEditStructure
     ? () {
         widget.onAssign([]);
         setState(() {});
@@ -1465,7 +1521,7 @@ else if (widget.space.isCreator)                          Row(
 ...[widget.space.isCreator ? 'You (Creator)' : '${widget.space.creatorName} (Creator)', ...widget.space.members]                            .map((m) {
                           final isSelected = task.assignedTo.contains(m);
                           return GestureDetector(
-                            onTap: widget.space.isCreator
+                            onTap: _canEditStructure
     ? () {
         final updated =
             List<String>.from(task.assignedTo);
@@ -1530,7 +1586,7 @@ else if (widget.space.isCreator)                          Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const _SectionLabel(label: 'Attachments'),
-                        if (widget.space.isCreator)
+                        if (_canManageAttachments)
   GestureDetector(
     onTap: () => _pickAttachment(),
                           child: Container(
@@ -1594,6 +1650,7 @@ else if (widget.space.isCreator)                          Row(
                                   ),
                                 ),
                                 const SizedBox(width: 5),
+                                if (_canManageAttachments)
                                 GestureDetector(
                                   onTap: () {
                                     widget.onRemoveAttachment(a);
@@ -1622,7 +1679,7 @@ else if (widget.space.isCreator)                          Row(
             ),
 
             // ── 8. Delete button: pinned at bottom ──
-            if (widget.space.isCreator)
+            if (_canEditStructure)
   Padding(
     padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
     child: GestureDetector(

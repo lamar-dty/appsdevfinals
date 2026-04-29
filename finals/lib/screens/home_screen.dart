@@ -24,6 +24,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _sheetController = DraggableScrollableController();
+    // Drain any cross-user notifications that arrived while the user was away.
+    TaskStore.instance.drainSharedInbox();
   }
 
   @override
@@ -299,6 +301,8 @@ class _NotificationSheetState extends State<_NotificationSheet> {
             case NotificationType.spaceMemberJoined:  return 14;
             case NotificationType.spaceJoined:        return 15;
             case NotificationType.spaceCreated:       return 16;
+            // Space - lifecycle
+            case NotificationType.spaceDeleted:       return 17;
           }
         }
         list.sort((a, b) => rank(a.type).compareTo(rank(b.type)));

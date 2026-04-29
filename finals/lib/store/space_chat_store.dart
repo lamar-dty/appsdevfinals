@@ -5,9 +5,12 @@ import '../models/space.dart';
 import '../models/space_message.dart';
 import 'task_store.dart';
 import 'auth_store.dart';
+import 'storage_keys.dart';
 
-String get _kMessagesPrefix => AuthStore.instance.scopedKey('space_chat_msgs_');
-String get _kCursorsKey     => AuthStore.instance.scopedKey('space_chat_cursors');
+// Messages are shared across all members of a space — use the unscoped
+// helper so every user reads/writes the same log for a given space code.
+// Read cursors are per-user — use the scoped helper.
+String get _kCursorsKey => AuthStore.instance.keyChatCursors();
 
 // ─────────────────────────────────────────────────────────────
 // SpaceChatStore
@@ -24,29 +27,39 @@ class SpaceChatStore extends ChangeNotifier {
   Future<void> load(List<String> spaceCodes) async {
     final prefs = await SharedPreferences.getInstance();
 
-    // Load messages for each known space
     for (final code in spaceCodes) {
-      final raw = prefs.getString('${_kMessagesPrefix}$code');
-      if (raw != null) {
-        final list = jsonDecode(raw) as List;
-        _messages[code] = list
-            .map((e) =>
-                SpaceMessage.fromJson(Map<String, dynamic>.from(e as Map)))
-            .toList();
+      if (code.isEmpty) continue;
+      try {
+        final raw = prefs.getString(kSpaceChatMessages(code));
+        if (raw != null) {
+          final list = jsonDecode(raw) as List;
+          _messages[code] = list
+              .map((e) =>
+                  SpaceMessage.fromJson(Map<String, dynamic>.from(e as Map)))
+              .toList();
+        }
+      } catch (_) {
+        // Corrupt message log for this space — start fresh.
+        _messages.remove(code);
+        await prefs.remove(kSpaceChatMessages(code));
       }
     }
 
-    // Load read cursors
-    final rawCursors = prefs.getString(_kCursorsKey);
-    if (rawCursors != null) {
-      final map = jsonDecode(rawCursors) as Map<String, dynamic>;
-      map.forEach((k, v) => _readCursors[k] = v as int);
+    try {
+      final rawCursors = prefs.getString(_kCursorsKey);
+      if (rawCursors != null) {
+        final map = jsonDecode(rawCursors) as Map<String, dynamic>;
+        map.forEach((k, v) => _readCursors[k] = (v as num).toInt());
+      }
+    } catch (_) {
+      _readCursors.clear();
+      await prefs.remove(_kCursorsKey);
     }
 
     notifyListeners();
   }
 
-  /// Clear in-memory state and reload for the current user.
+  /// Clear in-memory state and reload for the current user / space set.
   Future<void> reload(List<String> spaceCodes) async {
     _messages.clear();
     _readCursors.clear();
@@ -54,10 +67,11 @@ class SpaceChatStore extends ChangeNotifier {
   }
 
   Future<void> _saveMessages(String spaceCode) async {
+    if (spaceCode.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     final msgs = _messages[spaceCode] ?? [];
     await prefs.setString(
-      '${_kMessagesPrefix}$spaceCode',
+      kSpaceChatMessages(spaceCode),
       jsonEncode(msgs.map((m) => m.toJson()).toList()),
     );
   }
@@ -67,11 +81,12 @@ class SpaceChatStore extends ChangeNotifier {
     await prefs.setString(_kCursorsKey, jsonEncode(_readCursors));
   }
 
+  /// Delete all messages and cursors for [spaceCode] when a space is
+  /// deleted or the user leaves.
   Future<void> deleteMessagesFor(String spaceCode) async {
     _messages.remove(spaceCode);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('${_kMessagesPrefix}$spaceCode');
-    // Remove cursors for this space
+    await prefs.remove(kSpaceChatMessages(spaceCode));
     _readCursors.removeWhere((k, _) => k.startsWith('$spaceCode|'));
     await _saveCursors();
   }
@@ -81,19 +96,16 @@ class SpaceChatStore extends ChangeNotifier {
   List<SpaceMessage> messagesFor(String spaceCode) =>
       _messages.putIfAbsent(spaceCode, () => []);
 
-  void addMessage(
+  Future<void> addMessage(
     String spaceCode,
     SpaceMessage message, {
     Space? space,
     String? currentUser,
-  }) {
+  }) async {
     messagesFor(spaceCode).add(message);
 
-    if (space != null &&
-        currentUser != null &&
-        !message.isSystemMessage &&
-        message.sender != currentUser) {
-      TaskStore.instance.notifyNewChatMessage(
+    if (space != null && currentUser != null && !message.isSystemMessage) {
+      await TaskStore.instance.notifyNewChatMessage(
         space,
         message.sender,
         message.text,
@@ -114,8 +126,8 @@ class SpaceChatStore extends ChangeNotifier {
       '$spaceCode|$currentUser';
 
   void markAsRead(String spaceCode, String currentUser) {
-    final msgs     = messagesFor(spaceCode);
-    final key      = _cursorKey(spaceCode, currentUser);
+    final msgs      = messagesFor(spaceCode);
+    final key       = _cursorKey(spaceCode, currentUser);
     final lastIndex = msgs.length - 1;
     if (lastIndex > (_readCursors[key] ?? -1)) {
       _readCursors[key] = lastIndex;

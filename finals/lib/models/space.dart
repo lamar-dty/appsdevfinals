@@ -10,13 +10,16 @@ class SpaceAttachment {
   SpaceAttachment({required this.name});
 
   Map<String, dynamic> toJson() => {'name': name};
-  factory SpaceAttachment.fromJson(Map<String, dynamic> j) =>
-      SpaceAttachment(name: j['name'] as String);
 
-  /// Infer a file-type category from the extension.
+  factory SpaceAttachment.fromJson(Map<String, dynamic> j) =>
+      SpaceAttachment(name: (j['name'] as String?) ?? '');
+
   String get type {
-    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].contains(ext)) return 'image';
+    final ext =
+        name.contains('.') ? name.split('.').last.toLowerCase() : '';
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].contains(ext)) {
+      return 'image';
+    }
     if (['pdf'].contains(ext)) return 'pdf';
     if (['doc', 'docx'].contains(ext)) return 'doc';
     if (['xls', 'xlsx'].contains(ext)) return 'sheet';
@@ -58,14 +61,13 @@ class SpaceAttachment {
 // ─────────────────────────────────────────────────────────────
 class SpaceTask {
   String title;
-  String description; // mutable so notes can be edited in TaskDetailSheet
+  String description;
   String status;
   Color statusColor;
 
-  /// Names of assigned members. Empty list means unassigned.
+  /// Names of assigned members. Empty list = unassigned.
   List<String> assignedTo;
 
-  /// Simulated attachments — swap picker call here when file_picker is ready.
   final List<SpaceAttachment> attachments;
 
   SpaceTask({
@@ -75,10 +77,14 @@ class SpaceTask {
     required this.statusColor,
     List<String>? assignedTo,
     List<SpaceAttachment>? attachments,
-  })  : assignedTo = assignedTo ?? <String>[],
+  })  : assignedTo  = assignedTo  ?? <String>[],
         attachments = attachments ?? <SpaceAttachment>[];
 
-  static const List<String> _order = ['Not Started', 'In Progress', 'Completed'];
+  static const List<String> _order = [
+    'Not Started',
+    'In Progress',
+    'Completed'
+  ];
 
   static Color colorFor(String status) {
     switch (status) {
@@ -88,38 +94,43 @@ class SpaceTask {
     }
   }
 
-  factory SpaceTask.blank(String title, {String description = ''}) => SpaceTask(
-    title:       title,
-    description: description,
-    status:      'Not Started',
-    statusColor: const Color(0xFFB0BAD3),
-  );
+  factory SpaceTask.blank(String title, {String description = ''}) =>
+      SpaceTask(
+        title:       title,
+        description: description,
+        status:      'Not Started',
+        statusColor: const Color(0xFFB0BAD3),
+      );
 
   void cycleStatus() {
-    final next = (_order.indexOf(status) + 1) % _order.length;
+    final next  = (_order.indexOf(status) + 1) % _order.length;
     status      = _order[next];
     statusColor = colorFor(status);
   }
 
   Map<String, dynamic> toJson() => {
-        'title': title,
+        'title':       title,
         'description': description,
-        'status': status,
-        'assignedTo': assignedTo,
+        'status':      status,
+        'assignedTo':  assignedTo,
         'attachments': attachments.map((a) => a.toJson()).toList(),
       };
 
-  factory SpaceTask.fromJson(Map<String, dynamic> j) => SpaceTask(
-        title: j['title'] as String,
-        description: j['description'] as String,
-        status: j['status'] as String,
-        statusColor: colorFor(j['status'] as String),
-        assignedTo: List<String>.from(j['assignedTo'] as List),
-        attachments: (j['attachments'] as List)
-            .map((e) =>
-                SpaceAttachment.fromJson(Map<String, dynamic>.from(e as Map)))
-            .toList(),
-      );
+  factory SpaceTask.fromJson(Map<String, dynamic> j) {
+    final status = (j['status'] as String?) ?? 'Not Started';
+    return SpaceTask(
+      title:       (j['title'] as String?)       ?? '',
+      description: (j['description'] as String?) ?? '',
+      status:      status,
+      statusColor: colorFor(status),
+      assignedTo:  List<String>.from(
+          (j['assignedTo'] as List?)?.whereType<String>().toList() ?? []),
+      attachments: ((j['attachments'] as List?) ?? [])
+          .whereType<Map>()
+          .map((e) => SpaceAttachment.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -131,14 +142,13 @@ class Space {
   final String dateRange;
   final String dueDate;
 
-  /// All members except the creator. Mutable so members can be kicked.
+  /// All members except the creator.
   final List<String> members;
 
   /// True when the current user created this space.
   final bool isCreator;
 
-  /// Display name of whoever created the space. Stored so non-creators
-  /// can show the real name instead of a generic "You (Creator)" label.
+  /// Display name of whoever created the space.
   final String creatorName;
 
   String status;
@@ -147,8 +157,6 @@ class Space {
   double progress;
   int completedTasks;
   final List<SpaceTask> tasks;
-
-  /// Unique 8-character alphanumeric invite code for this space.
   final String inviteCode;
 
   Space({
@@ -170,7 +178,7 @@ class Space {
 
   static String _generateCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    final rng = Random.secure();
+    final rng   = Random.secure();
     return List.generate(8, (_) => chars[rng.nextInt(chars.length)]).join();
   }
 
@@ -181,7 +189,37 @@ class Space {
 
   bool get isCompleted => status == 'Completed';
 
-  /// Recalculates [completedTasks], [progress], and [status] from the task list.
+  // ── Member helpers ─────────────────────────────────────────
+
+  /// True if [displayName] is the creator OR appears in the members list.
+  /// Also accepts the sentinel strings used in the assignment picker UI.
+  bool containsMember(String displayName) {
+    if (displayName == creatorName) return true;
+    if (displayName == 'You' || displayName == 'You (Creator)') return true;
+    // Strip the " (Creator)" suffix that the picker sometimes appends.
+    final cleaned = displayName.endsWith(' (Creator)')
+        ? displayName.substring(0, displayName.length - ' (Creator)'.length)
+        : displayName;
+    return members.contains(cleaned) || cleaned == creatorName;
+  }
+
+  /// Remove stale assignee names that are no longer members of the space.
+  /// Call after removing a member or syncing from shared patches.
+  void pruneStaleAssignees() {
+    final valid = <String>{creatorName, ...members};
+    for (final task in tasks) {
+      task.assignedTo.removeWhere((name) {
+        if (name == 'You' || name == 'You (Creator)') return false;
+        final cleaned = name.endsWith(' (Creator)')
+            ? name.substring(0, name.length - ' (Creator)'.length)
+            : name;
+        return !valid.contains(cleaned);
+      });
+    }
+  }
+
+  // ── Recalculation ─────────────────────────────────────────
+
   void recalculate() {
     completedTasks = tasks.where((t) => t.status == 'Completed').length;
     progress       = tasks.isEmpty ? 0.0 : completedTasks / tasks.length;
@@ -198,10 +236,11 @@ class Space {
     }
   }
 
-  /// Days remaining until [dueDate] (negative = overdue).\
+  /// Days remaining until [dueDate] (negative = overdue).
   int get daysLeft {
     try {
       final parts = dueDate.split('/');
+      if (parts.length < 3) return 0;
       final due = DateTime(
         int.parse(parts[2]),
         int.parse(parts[0]),
@@ -209,43 +248,49 @@ class Space {
       );
       return due.difference(DateTime.now()).inDays;
     } catch (_) {
-      return 0;
+      return 0; // malformed date — treat as today
     }
   }
 
+  // ── Serialisation ─────────────────────────────────────────
+
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'description': description,
-        'dateRange': dateRange,
-        'dueDate': dueDate,
-        'members': members,
-        'isCreator': isCreator,
-        'creatorName': creatorName,
-        'status': status,
-        'accentColor': accentColor.value,
-        'progress': progress,
+        'name':           name,
+        'description':    description,
+        'dateRange':      dateRange,
+        'dueDate':        dueDate,
+        'members':        members,
+        'isCreator':      isCreator,
+        'creatorName':    creatorName,
+        'status':         status,
+        'accentColor':    accentColor.value,
+        'progress':       progress,
         'completedTasks': completedTasks,
-        'tasks': tasks.map((t) => t.toJson()).toList(),
-        'inviteCode': inviteCode,
+        'tasks':          tasks.map((t) => t.toJson()).toList(),
+        'inviteCode':     inviteCode,
       };
 
-  factory Space.fromJson(Map<String, dynamic> j) => Space(
-        name: j['name'] as String,
-        description: j['description'] as String,
-        dateRange: j['dateRange'] as String,
-        dueDate: j['dueDate'] as String,
-        members: List<String>.from(j['members'] as List),
-        isCreator: j['isCreator'] as bool,
-        creatorName: j['creatorName'] as String? ?? 'Creator',
-        status: j['status'] as String,
-        statusColor: SpaceTask.colorFor(j['status'] as String),
-        accentColor: Color(j['accentColor'] as int),
-        progress: (j['progress'] as num).toDouble(),
-        completedTasks: j['completedTasks'] as int,
-        tasks: (j['tasks'] as List)
-            .map((e) =>
-                SpaceTask.fromJson(Map<String, dynamic>.from(e as Map)))
-            .toList(),
-        inviteCode: j['inviteCode'] as String,
-      );
+  factory Space.fromJson(Map<String, dynamic> j) {
+    final status = (j['status'] as String?) ?? 'Not Started';
+    return Space(
+      name:           (j['name']        as String?) ?? '',
+      description:    (j['description'] as String?) ?? '',
+      dateRange:      (j['dateRange']   as String?) ?? '',
+      dueDate:        (j['dueDate']     as String?) ?? '',
+      members:        List<String>.from(
+          (j['members'] as List?)?.whereType<String>().toList() ?? []),
+      isCreator:      (j['isCreator']   as bool?)   ?? false,
+      creatorName:    (j['creatorName'] as String?) ?? 'Creator',
+      status:         status,
+      statusColor:    SpaceTask.colorFor(status),
+      accentColor:    Color((j['accentColor'] as int?) ?? 0xFF9B88E8),
+      progress:       ((j['progress']      as num?)  ?? 0.0).toDouble(),
+      completedTasks: (j['completedTasks'] as int?)  ?? 0,
+      tasks: ((j['tasks'] as List?) ?? [])
+          .whereType<Map>()
+          .map((e) => SpaceTask.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+      inviteCode: (j['inviteCode'] as String?) ?? '',
+    );
+  }
 }

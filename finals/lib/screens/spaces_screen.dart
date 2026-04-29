@@ -53,18 +53,39 @@ class SpacesScreenState extends State<SpacesScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Pull latest tasks/status/members from shared patches so all users
-    // see each other's changes when they return to this screen.
+
+    // ── Step 1: Drain deletion notices FIRST.
+    // If the creator deleted a space while this user was away, remove it
+    // from the local list immediately and fire the in-app notification so
+    // the user sees it in their notification panel.
+    SpaceStore.instance.drainDeletionNotices().then((removedCodes) {
+      for (final code in removedCodes) {
+        // Clean up chat + task notifications for each removed space.
+        SpaceChatStore.instance.deleteMessagesFor(code);
+        TaskStore.instance.clearSpaceNotifications(code);
+      }
+      // Drain the notification inbox so the "space deleted" alert appears.
+      TaskStore.instance.drainSharedInbox();
+      if (mounted && removedCodes.isNotEmpty) setState(() {});
+    });
+
+    // ── Step 2: Pull latest patches for spaces that still exist.
     SpaceStore.instance.syncFromSharedPatches().then((_) {
       if (mounted) setState(() {});
     });
-    // Drain any spaces that were pushed directly to this user by invite.
+
+    // ── Step 3: Accept any new space invites pushed to this user.
     SpaceStore.instance.drainPendingInvites().then((_) {
       if (mounted) setState(() {});
     });
-    // Drain any cross-user notifications (assignments, join alerts) written
-    // while this user was away.
+
+    // ── Step 4: Drain remaining cross-user notifications (assignments etc).
     TaskStore.instance.drainSharedInbox();
+
+    // ── Step 5: Prune stale notifications for any already-removed spaces.
+    TaskStore.instance.pruneOrphanedSpaceNotifications(
+      SpaceStore.instance.activeInviteCodes,
+    );
   }
 
   @override
@@ -82,6 +103,9 @@ class SpacesScreenState extends State<SpacesScreen>
     // Notify: space created + schedule deadline alerts for any pre-loaded tasks.
     TaskStore.instance.notifySpaceCreated(space);
     TaskStore.instance.generateSpaceTaskDeadlineAlerts(space);
+    // Push a pending invite to every member added at creation time so their
+    // device receives the space on next drainPendingInvites().
+    await _pushInvitesToAddedMembers(space);
   }
 
   // ── Navigation ─────────────────────────────────────────────
@@ -159,7 +183,33 @@ class SpacesScreenState extends State<SpacesScreen>
     }
     TaskStore.instance.clearSpaceNotifications(space.inviteCode);
     SpaceChatStore.instance.deleteMessagesFor(space.inviteCode);
+
+    if (space.isCreator) {
+      // Push a deletion notification to every member BEFORE removeSpace()
+      // wipes the member list from the registry, while we still have it.
+      for (final memberName in space.members) {
+        final cleaned = memberName
+            .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
+            .trim();
+        if (cleaned.isEmpty) continue;
+        final memberId = AuthStore.instance.userIdForName(cleaned);
+        if (memberId == null || memberId.isEmpty) continue;
+        await TaskStore.instance.notifySpaceDeletedForMember(
+          spaceName:   space.name,
+          creatorName: space.creatorName,
+          accentColor: space.accentColor,
+          inviteCode:  space.inviteCode,
+          memberUserId: memberId,
+        );
+      }
+    }
+
     await SpaceStore.instance.removeSpace(space);
+    // Prune any inbox/deadline notifications that referenced this space
+    // (or other already-deleted spaces) so ghost entries don't persist.
+    TaskStore.instance.pruneOrphanedSpaceNotifications(
+      SpaceStore.instance.activeInviteCodes,
+    );
     setState(() {
       if (_selectedSpace == space) _selectedSpace = null;
     });
@@ -223,6 +273,7 @@ class SpacesScreenState extends State<SpacesScreen>
             },
           );
         },
+        currentUser: currentUser,
       ),
     );
   }
@@ -266,14 +317,27 @@ class SpacesScreenState extends State<SpacesScreen>
       member,
       onConfirm: () {
         setState(() {
-          space.members.remove(member);
+          // Remove by raw display name AND the " (Creator)" sentinel variant
+          // so that whichever label is stored in members / assignedTo is caught.
+          final strippedMember =
+              member.replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '').trim();
+          space.members.removeWhere((m) {
+            final stripped = m.replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '').trim();
+            return stripped == strippedMember;
+          });
           SpaceChatStore.instance.addSystemMessage(
             space.inviteCode,
             '$member was removed from the space.',
           );
           for (final task in space.tasks) {
-            task.assignedTo.remove(member);
+            task.assignedTo.removeWhere((a) {
+              final stripped = a.replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '').trim();
+              return stripped == strippedMember;
+            });
           }
+          // Prune any remaining stale assignee references from ALL tasks.
+          space.pruneStaleAssignees();
+          space.recalculate();
         });
         _saveSpaces();
 
@@ -553,10 +617,37 @@ class SpacesScreenState extends State<SpacesScreen>
       // Notify: space created + schedule any pre-loaded task deadline alerts.
       TaskStore.instance.notifySpaceCreated(space);
       TaskStore.instance.generateSpaceTaskDeadlineAlerts(space);
+      // Push a pending invite to every member added at creation time so their
+      // device receives the space on next drainPendingInvites().
+      await _pushInvitesToAddedMembers(space);
     });
   }
 
   // ── Factory ────────────────────────────────────────────────
+  /// Pushes a pending invite into the SharedPreferences inbox of every member
+  /// that was added to [space] at creation time (i.e. everyone except the
+  /// creator). Their device drains the inbox via drainPendingInvites() the
+  /// next time SpacesScreen mounts or regains focus.
+  Future<void> _pushInvitesToAddedMembers(Space space) async {
+    final creatorName = AuthStore.instance.displayName;
+    for (final memberName in space.members) {
+      // Skip the creator's own entry and any sentinel strings.
+      final cleaned = memberName
+          .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
+          .trim();
+      if (cleaned == creatorName || cleaned == 'You' || cleaned.isEmpty) {
+        continue;
+      }
+      // Resolve display name → userId so we know which inbox key to write to.
+      final recipientId = AuthStore.instance.userIdForName(cleaned);
+      if (recipientId == null || recipientId.isEmpty) continue;
+      // 1. Push the space itself into their pending-invite inbox.
+      await SpaceStore.instance.pushPendingInvite(recipientId, space);
+      // 2. Push a notification so they see an alert in their inbox.
+      await TaskStore.instance.notifyAddedToSpace(space, cleaned, recipientId);
+    }
+  }
+
   Space _spaceFromResult(SpaceResult r) {
     String fmt(DateTime d) =>
         '${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}/${d.year.toString().substring(2)}';
@@ -588,15 +679,16 @@ class SpacesScreenState extends State<SpacesScreen>
 
   // ── Helpers ────────────────────────────────────────────────
 
-  /// Returns the display name that represents the current user in this space.
+  /// Returns the raw display name for the current user (never a sentinel).
   ///
-  /// This MUST match the label that TaskDetailSheet renders on the assign chip
-  /// for the current user:
-  ///   - creator → 'You (Creator)'
-  ///   - member  → 'You'
+  /// Always returns AuthStore.instance.displayName — the actual account name.
+  /// Do NOT return sentinel strings like 'You' or 'You (Creator)' here.
   ///
-  /// notifySpaceTaskAssigned checks task.assignedTo.contains(currentUser),
-  /// so any mismatch here causes false "you were assigned" notifications.
+  /// TaskStore._resolveAssigneeName() handles all sentinel translation
+  /// internally when computing notification recipients, so the store always
+  /// receives the raw name and performs its own normalisation. Passing a
+  /// sentinel string here would bypass that logic and produce missed or
+  /// duplicate notifications.
   String _resolvedCurrentUser(Space space) => AuthStore.instance.displayName;
 
   // ── Computed stats ─────────────────────────────────────────
