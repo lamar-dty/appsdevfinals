@@ -3,7 +3,7 @@ import '../constants/colors.dart';
 import '../models/space.dart';
 import '../models/space_message.dart';
 import '../store/space_chat_store.dart';
-import '../store/task_store.dart';                // ← Step 3: notification wiring
+import '../store/task_store.dart';
 import '../widgets/create_space_sheet.dart';
 import '../widgets/spaces/space_painters.dart';
 import '../widgets/spaces/space_summary_background.dart';
@@ -39,6 +39,11 @@ class SpacesScreenState extends State<SpacesScreen>
   double _sheetSize = _snapPeek;
   Space? _selectedSpace;
 
+  // Holds the ScrollController provided by DraggableScrollableSheet's builder.
+  // Updated every time the builder runs; used to reset scroll position to top
+  // before collapsing the sheet on tab-away so the drag handle stays visible.
+  ScrollController? _sheetScrollController;
+
   List<Space> get _spaces => SpaceStore.instance.spaces;
 
   @override
@@ -67,20 +72,10 @@ class SpacesScreenState extends State<SpacesScreen>
     super.didChangeDependencies();
 
     // ── Step 1: Drain deletion notices FIRST.
-    // If the creator deleted a space while this user was away, remove it
-    // from the local list immediately and fire the in-app notification so
-    // the user sees it in their notification panel.
     SpaceStore.instance.drainDeletionNotices().then((removedCodes) async {
       if (removedCodes.isEmpty) return;
-      // ① Drain the shared inbox FIRST so the spaceDeleted notification is
-      //    already in _notifications before clearSpaceNotifications runs.
-      //    Reversing this order would wipe the notification before the user
-      //    ever sees it (clearSpaceNotifications preserves spaceDeleted now,
-      //    but draining first is still the safer, intention-revealing order).
       await TaskStore.instance.drainSharedInbox();
       for (final code in removedCodes) {
-        // ② Clean up operational notifications (task alerts, chat, deadlines)
-        //    for each removed space. spaceDeleted-type entries are preserved.
         SpaceChatStore.instance.deleteMessagesFor(code);
         TaskStore.instance.clearSpaceNotifications(code);
       }
@@ -116,10 +111,28 @@ class SpacesScreenState extends State<SpacesScreen>
   }
 
   // Collapse sheet when navigating away from Spaces tab (index 2).
+  // Resets the internal scroll position to top first so the drag handle is
+  // always visible after the sheet collapses.
   void _onTabChanged() {
     if (!mounted) return;
     if (widget.tabNotifier.value == 2) return; // staying on spaces — no-op
     if (!_sheetController.isAttached) return;
+
+    // Reset the spaces list scroll to top before collapsing.
+    // Guards: controller must have clients and position pixels must be above
+    // minScrollExtent to avoid jumpTo exceptions on already-topped lists.
+    final sc = _sheetScrollController;
+    if (sc != null && sc.hasClients) {
+      try {
+        final pos = sc.position;
+        if (pos.pixels > pos.minScrollExtent) {
+          sc.jumpTo(pos.minScrollExtent);
+        }
+      } catch (_) {
+        // Controller detached or position unavailable — safe to ignore.
+      }
+    }
+
     _sheetController.animateTo(
       _snapPeek,
       duration: const Duration(milliseconds: 300),
@@ -132,33 +145,26 @@ class SpacesScreenState extends State<SpacesScreen>
     final space = _spaceFromResult(result);
     await SpaceStore.instance.addSpace(space);
     setState(() {});
-    // Notify: space created + schedule deadline alerts for any pre-loaded tasks.
     TaskStore.instance.notifySpaceCreated(space);
     TaskStore.instance.generateSpaceTaskDeadlineAlerts(space);
-    // Push a pending invite to every member added at creation time so their
-    // device receives the space on next drainPendingInvites().
     await _pushInvitesToAddedMembers(space);
   }
 
   // ── Deep-link public API (called by NotificationRouter) ───
-  /// Opens the space overview for the given invite code.
-  /// Safe to call from outside — validates existence defensively.
   void openSpaceByCode(String inviteCode) {
     final space = SpaceStore.instance.spaces
         .where((s) => s.inviteCode == inviteCode)
         .firstOrNull;
-    if (space == null) return; // space deleted — router shows snackbar
+    if (space == null) return;
     _selectSpace(space);
   }
 
-  /// Opens the space and then immediately shows the chat sheet.
   void openSpaceChatByCode(String inviteCode) {
     final space = SpaceStore.instance.spaces
         .where((s) => s.inviteCode == inviteCode)
         .firstOrNull;
     if (space == null) return;
     _selectSpace(space);
-    // Give the sheet animation a frame to settle, then open chat.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       showModalBottomSheet(
@@ -182,7 +188,6 @@ class SpacesScreenState extends State<SpacesScreen>
     });
   }
 
-  /// Opens the space and then immediately taps the matching task.
   void openSpaceTaskByCode(String inviteCode, String taskTitle) {
     final space = SpaceStore.instance.spaces
         .where((s) => s.inviteCode == inviteCode)
@@ -194,7 +199,7 @@ class SpacesScreenState extends State<SpacesScreen>
       final task = space.tasks
           .where((t) => t.title == taskTitle)
           .firstOrNull;
-      if (task == null) return; // task deleted — fail silently (snackbar shown by router)
+      if (task == null) return;
       _onTaskTapped(space, task);
     });
   }
@@ -252,8 +257,6 @@ class SpacesScreenState extends State<SpacesScreen>
       space.recalculate();
     });
     _saveSpaces();
-
-    // Notify: task added + check deadline alerts for it.
     TaskStore.instance.notifySpaceTaskAdded(space, task);
     TaskStore.instance.refreshDeadlineAlertFor(space, task);
   }
@@ -262,22 +265,17 @@ class SpacesScreenState extends State<SpacesScreen>
   Future<void> _removeSpace(Space space) async {
     if (!space.isCreator) {
       final leavingName = AuthStore.instance.displayName;
-      // Strip the leaver from every task's assignedTo list and write the
-      // cleaned state to shared patches so other members see it on next sync.
       for (final task in space.tasks) {
         task.assignedTo.remove(leavingName);
       }
       space.members.remove(leavingName);
       await SpaceStore.instance.writeSharedPatchForLeave(space);
-      // Notify remaining members that someone left.
       await TaskStore.instance.notifyMemberLeft(space, leavingName);
     }
     TaskStore.instance.clearSpaceNotifications(space.inviteCode);
     SpaceChatStore.instance.deleteMessagesFor(space.inviteCode);
 
     if (space.isCreator) {
-      // Push a deletion notification to every member BEFORE removeSpace()
-      // wipes the member list from the registry, while we still have it.
       for (final memberName in space.members) {
         final cleaned = memberName
             .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
@@ -296,8 +294,6 @@ class SpacesScreenState extends State<SpacesScreen>
     }
 
     await SpaceStore.instance.removeSpace(space);
-    // Prune any inbox/deadline notifications that referenced this space
-    // (or other already-deleted spaces) so ghost entries don't persist.
     TaskStore.instance.pruneOrphanedSpaceNotifications(
       SpaceStore.instance.activeInviteCodes,
     );
@@ -325,7 +321,6 @@ class SpacesScreenState extends State<SpacesScreen>
             space.recalculate();
           });
           _saveSpaces();
-
           if (task.status == 'Completed') {
             TaskStore.instance.notifySpaceTaskCompleted(space, task);
           } else {
@@ -336,7 +331,7 @@ class SpacesScreenState extends State<SpacesScreen>
         onAssign: (members) {
           setState(() => task.assignedTo = members);
           _saveSpaces();
-          TaskStore.instance.notifySpaceTaskAssigned(space, task, currentUser); // async — fire and forget
+          TaskStore.instance.notifySpaceTaskAssigned(space, task, currentUser);
         },
         onUpdateNotes: (notes) {
           setState(() => task.description = notes);
@@ -408,8 +403,6 @@ class SpacesScreenState extends State<SpacesScreen>
       member,
       onConfirm: () {
         setState(() {
-          // Remove by raw display name AND the " (Creator)" sentinel variant
-          // so that whichever label is stored in members / assignedTo is caught.
           final strippedMember =
               member.replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '').trim();
           space.members.removeWhere((m) {
@@ -426,13 +419,10 @@ class SpacesScreenState extends State<SpacesScreen>
               return stripped == strippedMember;
             });
           }
-          // Prune any remaining stale assignee references from ALL tasks.
           space.pruneStaleAssignees();
           space.recalculate();
         });
         _saveSpaces();
-
-        // Notify: member removed.
         TaskStore.instance.notifyMemberRemoved(space, member);
       },
     );
@@ -443,58 +433,6 @@ class SpacesScreenState extends State<SpacesScreen>
       context,
       isAlreadyJoined: (code) => _spaces.any((s) => s.inviteCode == code),
       onJoin: (code) async {
-        if (code == '00000000') {
-          // ── Demo space ──────────────────────────────────
-          final newSpace = Space(
-            name: 'Final Thesis',
-            description: 'Shared workspace for the team.',
-            dateRange: '04/29/2026 - 05/29/2026',
-            dueDate: '05/29/2026',
-            members: [
-              'Alex (Creator)',
-              'John',
-              'Mika',
-            ],
-            isCreator: false,
-            creatorName: 'Alex',
-            status: 'Not Started',
-            statusColor: const Color(0xFFB0BAD3),
-            accentColor: const Color(0xFF6C63FF),
-            progress: 0,
-            completedTasks: 0,
-            tasks: [
-              SpaceTask(
-                title: 'Research Chapter 1',
-                description: 'Finish the introduction and background study.',
-                status: 'In Progress',
-                statusColor: const Color(0xFF4A90D9),
-                assignedTo: ['Alex (Creator)', 'Mika'],
-              ),
-              SpaceTask(
-                title: 'Prepare Presentation Slides',
-                description: 'Create the defense presentation deck.',
-                status: 'Not Started',
-                statusColor: const Color(0xFFB0BAD3),
-                assignedTo: ['John'],
-              ),
-            ],
-            inviteCode: '00000000',
-          );
-          await SpaceStore.instance.addSpace(newSpace);
-          setState(() {});
-          TaskStore.instance.notifySpaceJoined(newSpace);
-          TaskStore.instance.generateSpaceTaskDeadlineAlerts(newSpace);
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _seedFinalThesisChat(newSpace.inviteCode);
-            SpaceChatStore.instance.addSystemMessage(
-              newSpace.inviteCode,
-              'You joined the space.',
-            );
-          });
-          return;
-        }
-
-        // ── Real invite code — look up in global registry ──
         final found = await SpaceStore.instance.lookupByCode(code);
         if (found == null) {
           if (mounted) {
@@ -505,7 +443,6 @@ class SpacesScreenState extends State<SpacesScreen>
           return;
         }
 
-        // Add to this user's space list as a non-creator member.
         final joined = Space(
           name: found.name,
           description: found.description,
@@ -525,14 +462,12 @@ class SpacesScreenState extends State<SpacesScreen>
         );
 
         await SpaceStore.instance.addSpace(joined);
-        // Patch the global registry member list so the creator sees the new joiner.
         await SpaceStore.instance.patchMembersInRegistry(
           joined.inviteCode,
           joined.members,
         );
         setState(() {});
         TaskStore.instance.notifySpaceJoined(joined);
-        // Push a notification to the creator's inbox so they see the new member.
         await TaskStore.instance.notifyMemberJoined(
           joined,
           AuthStore.instance.displayName,
@@ -549,153 +484,6 @@ class SpacesScreenState extends State<SpacesScreen>
     );
   }
 
-  // ── Demo chat seed ─────────────────────────────────────────
-  void _seedFinalThesisChat(String inviteCode) {
-    final store = SpaceChatStore.instance;
-
-    final existing = store.messagesFor(inviteCode);
-    final hasRealMessages = existing.any((m) => !m.isSystemMessage);
-    if (hasRealMessages) return;
-
-    final now = DateTime.now();
-
-    DateTime t(int daysAgo, int hour, int minute) => DateTime(
-          now.year,
-          now.month,
-          now.day - daysAgo,
-          hour,
-          minute,
-        );
-
-    // ── Day –3 ──────────────────────────────────────────────
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Alex (Creator)',
-      text: 'Hey team! I just set up the workspace. '
-          'We have exactly a month before the defense — let\'s stay on top of this 💪',
-      timestamp: t(3, 9, 5),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'John',
-      text: 'Sounds good. What\'s the plan for dividing the chapters?',
-      timestamp: t(3, 9, 18),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Alex (Creator)',
-      text: 'I\'ll handle Chapter 1 (intro + background) together with Mika. '
-          'John, can you own the presentation slides once we have a draft?',
-      timestamp: t(3, 9, 22),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'John',
-      text: 'Sure, I\'m good at slides. Just send me the outline when it\'s ready.',
-      timestamp: t(3, 9, 25),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Mika',
-      text: 'Hi everyone! Just accepted the invite. '
-          'Alex I already started skimming the related literature, '
-          'I\'ll share my notes later today.',
-      timestamp: t(3, 10, 47),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Alex (Creator)',
-      text: 'Perfect Mika, that\'s exactly what we need first. Thank you!',
-      timestamp: t(3, 10, 50),
-    ));
-
-    // ── Day –2 ──────────────────────────────────────────────
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Mika',
-      text: 'Okay sharing my lit review notes now — '
-          'found 3 really strong papers that back up our thesis statement.',
-      timestamp: t(2, 11, 3),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Alex (Creator)',
-      text: 'These are great, Mika 🙌 I\'ll weave them into Chapter 1 tonight.',
-      timestamp: t(2, 11, 15),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'John',
-      text: 'Quick question — are we using APA or IEEE citation style?',
-      timestamp: t(2, 13, 30),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Alex (Creator)',
-      text: 'APA 7th edition. Our adviser specified that in the guidelines doc.',
-      timestamp: t(2, 13, 35),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'John',
-      text: 'Got it, thanks. I\'ll make sure the references slide matches.',
-      timestamp: t(2, 13, 36),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Mika',
-      text: 'Also — should the background section cover the local context '
-          'or just global studies?',
-      timestamp: t(2, 15, 12),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Alex (Creator)',
-      text: 'Both, but prioritise local. Our panel loves seeing '
-          'Philippine-context research.',
-      timestamp: t(2, 15, 20),
-    ));
-
-    // ── Day –1 ──────────────────────────────────────────────
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Alex (Creator)',
-      text: 'Chapter 1 first draft is done ✅ '
-          'Uploading to the shared drive now. Please review before tomorrow.',
-      timestamp: t(1, 9, 0),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Mika',
-      text: 'Read it! Flow is solid. '
-          'I left two comments on the problem statement — minor wording things.',
-      timestamp: t(1, 11, 44),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Alex (Creator)',
-      text: 'Thanks Mika, fixing those now.',
-      timestamp: t(1, 11, 50),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'John',
-      text: 'Just finished the slide skeleton — title, agenda, problem statement, '
-          'and a placeholder for the methodology. '
-          'Will flesh out the rest once Ch.1 is finalised.',
-      timestamp: t(1, 14, 22),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Mika',
-      text: 'Looking sharp John 👍 maybe add a timeline slide near the end?',
-      timestamp: t(1, 14, 35),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'John',
-      text: 'Good call, adding it now.',
-      timestamp: t(1, 14, 38),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Alex (Creator)',
-      text: 'Great progress everyone. Let\'s sync tomorrow morning '
-          'and do a full run-through. 10am work for both of you?',
-      timestamp: t(1, 17, 5),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'John',
-      text: '10am works for me ✅',
-      timestamp: t(1, 17, 10),
-    ));
-    store.addMessage(inviteCode, SpaceMessage(
-      sender: 'Mika',
-      text: '10am works! See you both then 🙂',
-      timestamp: t(1, 17, 14),
-    ));
-  }
-
   void _onAddSpace() {
     showCreateSpaceSheet(context, onSaved: (result) async {
       final space = _spaceFromResult(result);
@@ -703,38 +491,27 @@ class SpacesScreenState extends State<SpacesScreen>
       setState(() {});
       SpaceChatStore.instance.addSystemMessage(
         space.inviteCode,
-        '${space.members.isNotEmpty ? space.members.first : "You"} created the space.',
+        '${space.creatorName} created the space.',
       );
-      // Notify: space created + schedule any pre-loaded task deadline alerts.
       TaskStore.instance.notifySpaceCreated(space);
       TaskStore.instance.generateSpaceTaskDeadlineAlerts(space);
-      // Push a pending invite to every member added at creation time so their
-      // device receives the space on next drainPendingInvites().
       await _pushInvitesToAddedMembers(space);
     });
   }
 
   // ── Factory ────────────────────────────────────────────────
-  /// Pushes a pending invite into the SharedPreferences inbox of every member
-  /// that was added to [space] at creation time (i.e. everyone except the
-  /// creator). Their device drains the inbox via drainPendingInvites() the
-  /// next time SpacesScreen mounts or regains focus.
   Future<void> _pushInvitesToAddedMembers(Space space) async {
     final creatorName = AuthStore.instance.displayName;
     for (final memberName in space.members) {
-      // Skip the creator's own entry and any sentinel strings.
       final cleaned = memberName
           .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
           .trim();
       if (cleaned == creatorName || cleaned == 'You' || cleaned.isEmpty) {
         continue;
       }
-      // Resolve display name → userId so we know which inbox key to write to.
       final recipientId = AuthStore.instance.userIdForName(cleaned);
       if (recipientId == null || recipientId.isEmpty) continue;
-      // 1. Push the space itself into their pending-invite inbox.
       await SpaceStore.instance.pushPendingInvite(recipientId, space);
-      // 2. Push a notification so they see an alert in their inbox.
       await TaskStore.instance.notifyAddedToSpace(space, cleaned, recipientId);
     }
   }
@@ -769,17 +546,6 @@ class SpacesScreenState extends State<SpacesScreen>
   }
 
   // ── Helpers ────────────────────────────────────────────────
-
-  /// Returns the raw display name for the current user (never a sentinel).
-  ///
-  /// Always returns AuthStore.instance.displayName — the actual account name.
-  /// Do NOT return sentinel strings like 'You' or 'You (Creator)' here.
-  ///
-  /// TaskStore._resolveAssigneeName() handles all sentinel translation
-  /// internally when computing notification recipients, so the store always
-  /// receives the raw name and performs its own normalisation. Passing a
-  /// sentinel string here would bypass that logic and produce missed or
-  /// duplicate notifications.
   String _resolvedCurrentUser(Space space) => AuthStore.instance.displayName;
 
   // ── Computed stats ─────────────────────────────────────────
@@ -837,7 +603,13 @@ class SpacesScreenState extends State<SpacesScreen>
           ),
         ),
 
-        // Draggable sheet
+        // ── DRAGGABLE SPACES SHEET ────────────────────────────────────────
+        // Canonical architecture: DecoratedBox (shadow) → ClipRRect (rounded
+        // corners) → ColoredBox → SpacesSheet (CustomScrollView root).
+        // The DraggableScrollableSheet scrollController is cached in
+        // _sheetScrollController and passed directly into SpacesSheet so it
+        // attaches to the CustomScrollView root — the only scrollable that
+        // drives sheet drag, header pinning, and list scroll from one axis.
         DraggableScrollableSheet(
           controller: _sheetController,
           initialChildSize: _snapPeek,
@@ -846,13 +618,10 @@ class SpacesScreenState extends State<SpacesScreen>
           snap: true,
           snapSizes: const [_snapPeek, _snapHalf, _snapFull],
           builder: (context, scrollController) {
-            return Container(
+            // Cache for scroll-reset guard in _onTabChanged.
+            _sheetScrollController = scrollController;
+            return DecoratedBox(
               decoration: const BoxDecoration(
-                color: kWhite,
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(28),
-                  topRight: Radius.circular(28),
-                ),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black26,
@@ -861,19 +630,25 @@ class SpacesScreenState extends State<SpacesScreen>
                   ),
                 ],
               ),
-              child: SingleChildScrollView(
-                controller: scrollController,
-                physics: const ClampingScrollPhysics(),
-                child: SpacesSheet(
-                  key: const ValueKey('spacesSheet'),
-                  spaces: _spaces,
-                  onSpaceTap: _selectSpace,
-                  onAdd: _onAddSpace,
-                  onJoin: _onJoinSpace,
-                  onDelete: _onDeleteSpace,
-                  inProgress: _inProgressCount,
-                  completed: _completedCount,
-                  notStarted: _notStartedCount,
+              child: ClipRRect(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(28),
+                  topRight: Radius.circular(28),
+                ),
+                child: ColoredBox(
+                  color: kWhite,
+                  child: SpacesSheet(
+                    key: const ValueKey('spacesSheet'),
+                    scrollController: scrollController,
+                    spaces: _spaces,
+                    onSpaceTap: _selectSpace,
+                    onAdd: _onAddSpace,
+                    onJoin: _onJoinSpace,
+                    onDelete: _onDeleteSpace,
+                    inProgress: _inProgressCount,
+                    completed: _completedCount,
+                    notStarted: _notStartedCount,
+                  ),
                 ),
               ),
             );

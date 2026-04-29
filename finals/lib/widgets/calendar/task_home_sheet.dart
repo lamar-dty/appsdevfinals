@@ -9,7 +9,14 @@ import 'task_detail_sheet.dart';
 // TaskHomeSheet — live task list with timeline-style layout
 // ─────────────────────────────────────────────────────────────
 class TaskHomeSheet extends StatefulWidget {
-  const TaskHomeSheet({super.key});
+  // The DraggableScrollableSheet's scroll controller — must be attached
+  // directly to the root CustomScrollView so dragging the sheet and
+  // scrolling the list share a single scroll position.  This eliminates
+  // nested-scroll conflicts and keeps the drag handle always visible.
+  final ScrollController scrollController;
+
+  const TaskHomeSheet({super.key, required this.scrollController});
+
   @override
   State<TaskHomeSheet> createState() => _TaskHomeSheetState();
 }
@@ -106,209 +113,6 @@ class _TaskHomeSheetState extends State<TaskHomeSheet> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final store = TaskStore.instance;
-    final tasks = _sorted(store.recentTasks);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // ── Drag handle ─────────────────────────────────────
-        Center(
-          child: Container(
-            width: 40, height: 4,
-            margin: const EdgeInsets.only(top: 12, bottom: 18),
-            decoration: BoxDecoration(
-              color: Colors.grey.withOpacity(0.30),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-        ),
-
-        // ── Header row ──────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
-          child: Row(
-            children: [
-              // Icon bubble — matches add-menu header style
-              Container(
-                width: 38, height: 38,
-                decoration: BoxDecoration(
-                  color: kTeal.withOpacity(0.13),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: kTeal.withOpacity(0.28), width: 1.4),
-                ),
-                child: const Icon(Icons.task_alt_rounded, color: kTeal, size: 19),
-              ),
-              const SizedBox(width: 11),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('My Tasks',
-                      style: TextStyle(color: kNavyDark, fontSize: 17, fontWeight: FontWeight.bold)),
-                  Text(
-                    store.total == 0
-                        ? 'Nothing yet — tap + to begin'
-                        : '${store.completed} of ${store.total} completed',
-                    style: TextStyle(color: const Color(0xFF6B7A99), fontSize: 12),
-                  ),
-                ],
-              ),
-              const Spacer(),
-              // Mini completion pill
-              if (store.total > 0)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: kTeal.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: kTeal.withOpacity(0.3)),
-                  ),
-                  child: Text(
-                    '${(store.completionPercent * 100).round()}%',
-                    style: const TextStyle(color: kTeal, fontSize: 12, fontWeight: FontWeight.w800),
-                  ),
-                ),
-            ],
-          ),
-        ),
-
-        // ── Donut + stat rows ────────────────────────────────
-        if (store.total > 0)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-            child: Row(
-              children: [
-                // Donut
-                SizedBox(
-                  width: 110,
-                  height: 110,
-                  child: CustomPaint(
-                    painter: _DonutPainter(
-                      inProgress: store.inProgress,
-                      completed:  store.completed,
-                      notStarted: store.notStarted,
-                      total:      store.total,
-                    ),
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            '${(store.completionPercent * 100).round()}%',
-                            style: const TextStyle(
-                              color: kNavyDark,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            'done',
-                            style: TextStyle(
-                              color: const Color(0xFF6B7A99),
-                              fontSize: 10,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(width: 20),
-
-                // Stat rows
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _DonutStatRow(
-                        color: const Color(0xFF4A90D9),
-                        label: 'In Progress',
-                        count: store.inProgress,
-                        total: store.total,
-                      ),
-                      const SizedBox(height: 12),
-                      _DonutStatRow(
-                        color: const Color(0xFFB0BAD3),
-                        label: 'Not Started',
-                        count: store.notStarted,
-                        total: store.total,
-                      ),
-                      const SizedBox(height: 12),
-                      _DonutStatRow(
-                        color: const Color(0xFF3BBFA3),
-                        label: 'Completed',
-                        count: store.completed,
-                        total: store.total,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-        const SizedBox(height: 20),
-        Divider(height: 1, color: const Color(0xFF6B7A99).withOpacity(0.15), indent: 20, endIndent: 20),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 6),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                tasks.isEmpty ? '' : '${tasks.length} task${tasks.length == 1 ? '' : 's'}',
-                style: TextStyle(color: const Color(0xFF6B7A99).withOpacity(0.6), fontSize: 11),
-              ),
-              GestureDetector(
-                onTap: store.total > 0 ? _showManageSheet : null,
-                child: AnimatedOpacity(
-                  duration: const Duration(milliseconds: 150),
-                  opacity: store.total > 0 ? 1.0 : 0.35,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF6B7A99).withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: const Color(0xFF6B7A99).withOpacity(0.18)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.sort_rounded, size: 12, color: const Color(0xFF6B7A99)),
-                        const SizedBox(width: 4),
-                        Text(
-                          _sortLabel(_sortBy),
-                          style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 11, fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(width: 3),
-                        Icon(Icons.keyboard_arrow_down_rounded, size: 12, color: const Color(0xFF6B7A99)),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // ── Task list or empty ───────────────────────────────
-        if (tasks.isEmpty)
-          _EmptyState()
-        else
-          ...List.generate(tasks.length, (i) => _TaskRow(
-            task: tasks[i],
-            isLast: i == tasks.length - 1,
-            onStatusChanged: (s) => TaskStore.instance.updateStatus(tasks[i].id, s),
-            onDelete: () => TaskStore.instance.deleteTask(tasks[i].id),
-          )),
-
-        const SizedBox(height: 80),
-      ],
-    );
-  }
-
   String _sortLabel(_SortBy s) {
     switch (s) {
       case _SortBy.dueDate:  return 'Due Date';
@@ -316,6 +120,299 @@ class _TaskHomeSheetState extends State<TaskHomeSheet> {
       case _SortBy.status:   return 'Status';
       case _SortBy.category: return 'Category';
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = TaskStore.instance;
+    final tasks = _sorted(store.recentTasks);
+
+    // ── Architecture: CustomScrollView at the root ────────────────────────
+    // The DraggableScrollableSheet requires its scrollController to be
+    // attached to a scrollable that is the direct child of its builder.
+    // Using CustomScrollView satisfies this: dragging anywhere on the sheet
+    // — header or list — travels through a single scroll controller so the
+    // sheet drag, header interaction, and list scroll all work correctly.
+    //
+    // The header (drag handle + title row + donut + controls) lives in a
+    // SliverAppBar with pinned: true so it stays visible at the top of the
+    // sheet regardless of list scroll position.
+    // The task items live in a SliverList (or SliverFillRemaining for
+    // the empty state).
+    return CustomScrollView(
+      controller: widget.scrollController,
+      physics: const ClampingScrollPhysics(),
+      slivers: [
+        // ── Pinned header sliver ─────────────────────────────────────────
+        // SliverAppBar(pinned:true) + FlexibleSpaceBar(collapseMode:none)
+        // is the canonical pattern from home_screen.dart.  It avoids the
+        // layoutExtent/paintExtent SliverGeometry crash that SliverPersistentHeader
+        // produces when minExtent/maxExtent don't exactly match painted height.
+        //
+        // toolbarHeight pixel breakdown (no-tasks / with-tasks):
+        //   drag handle  : 12 top + 4 + 18 bottom           =  34
+        //   header row   : icon 38 + col text ~30            =  38  (tallest child)
+        //   SizedBox(20) :                                   =  20
+        //   Divider(h:1) :                                   =   1
+        //   controls row : pad-top 8 + ~28 content + pad-b 6=  44
+        //   ── no-tasks subtotal ──────────────────────────────  137  → 140 (+3 guard)
+        //   donut block  : pad-top 14 + Row height 110       = 124
+        //   ── with-tasks total ───────────────────────────────  261  → 278 (+17 guard)
+        // The guard absorbs sub-pixel rounding and mild font-scale variance.
+        SliverAppBar(
+          pinned: true,
+          automaticallyImplyLeading: false,
+          backgroundColor: kWhite,
+          surfaceTintColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          elevation: 0,
+          toolbarHeight: store.total > 0 ? 278.0 : 140.0,
+          flexibleSpace: FlexibleSpaceBar(
+            collapseMode: CollapseMode.none,
+            background: _TaskSheetHeader(
+              store: store,
+              tasks: tasks,
+              sortBy: _sortBy,
+              sortLabel: _sortLabel(_sortBy),
+              onShowManage: _showManageSheet,
+            ),
+          ),
+        ),
+
+        // ── Content sliver ───────────────────────────────────────────────
+        if (tasks.isEmpty)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            fillOverscroll: false,
+            child: _EmptyState(),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.only(bottom: 80),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => _TaskRow(
+                  task: tasks[i],
+                  isLast: i == tasks.length - 1,
+                  onStatusChanged: (s) =>
+                      TaskStore.instance.updateStatus(tasks[i].id, s),
+                  onDelete: () => TaskStore.instance.deleteTask(tasks[i].id),
+                ),
+                childCount: tasks.length,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ── Pinned header widget ──────────────────────────────────────────────────────
+// Plain StatelessWidget rendered inside a SliverAppBar's flexibleSpace.
+// Using SliverAppBar(pinned:true) + FlexibleSpaceBar instead of
+// SliverPersistentHeaderDelegate avoids the layoutExtent/paintExtent mismatch
+// crash that occurs when the delegate's reported extent doesn't exactly match
+// its painted content height.
+class _TaskSheetHeader extends StatelessWidget {
+  final dynamic store;
+  final List<Task> tasks;
+  final _SortBy sortBy;
+  final String sortLabel;
+  final VoidCallback onShowManage;
+
+  const _TaskSheetHeader({
+    required this.store,
+    required this.tasks,
+    required this.sortBy,
+    required this.sortLabel,
+    required this.onShowManage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: kWhite,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Drag handle ─────────────────────────────────────
+          Center(
+            child: Container(
+              width: 40, height: 4,
+              margin: const EdgeInsets.only(top: 12, bottom: 18),
+              decoration: BoxDecoration(
+                color: Colors.grey.withOpacity(0.30),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+
+          // ── Header row ──────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+            child: Row(
+              children: [
+                Container(
+                  width: 38, height: 38,
+                  decoration: BoxDecoration(
+                    color: kTeal.withOpacity(0.13),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: kTeal.withOpacity(0.28), width: 1.4),
+                  ),
+                  child: const Icon(Icons.task_alt_rounded, color: kTeal, size: 19),
+                ),
+                const SizedBox(width: 11),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('My Tasks',
+                        style: TextStyle(color: kNavyDark, fontSize: 17, fontWeight: FontWeight.bold)),
+                    Text(
+                      store.total == 0
+                          ? 'Nothing yet — tap + to begin'
+                          : '${store.completed} of ${store.total} completed',
+                      style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 12),
+                    ),
+                  ],
+                ),
+                const Spacer(),
+                if (store.total > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: kTeal.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: kTeal.withOpacity(0.3)),
+                    ),
+                    child: Text(
+                      '${(store.completionPercent * 100).round()}%',
+                      style: const TextStyle(color: kTeal, fontSize: 12, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          // ── Donut + stat rows ────────────────────────────────
+          if (store.total > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 110,
+                    height: 110,
+                    child: CustomPaint(
+                      painter: _DonutPainter(
+                        inProgress: store.inProgress,
+                        completed:  store.completed,
+                        notStarted: store.notStarted,
+                        total:      store.total,
+                      ),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${(store.completionPercent * 100).round()}%',
+                              style: const TextStyle(
+                                color: kNavyDark,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const Text(
+                              'done',
+                              style: TextStyle(
+                                color: Color(0xFF6B7A99),
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(width: 20),
+
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _DonutStatRow(
+                          color: const Color(0xFF4A90D9),
+                          label: 'In Progress',
+                          count: store.inProgress,
+                          total: store.total,
+                        ),
+                        const SizedBox(height: 12),
+                        _DonutStatRow(
+                          color: const Color(0xFFB0BAD3),
+                          label: 'Not Started',
+                          count: store.notStarted,
+                          total: store.total,
+                        ),
+                        const SizedBox(height: 12),
+                        _DonutStatRow(
+                          color: const Color(0xFF3BBFA3),
+                          label: 'Completed',
+                          count: store.completed,
+                          total: store.total,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          const SizedBox(height: 20),
+          Divider(height: 1, color: const Color(0xFF6B7A99).withOpacity(0.15), indent: 20, endIndent: 20),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  tasks.isEmpty ? '' : '${tasks.length} task${tasks.length == 1 ? '' : 's'}',
+                  style: TextStyle(color: const Color(0xFF6B7A99).withOpacity(0.6), fontSize: 11),
+                ),
+                GestureDetector(
+                  onTap: store.total > 0 ? onShowManage : null,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 150),
+                    opacity: store.total > 0 ? 1.0 : 0.35,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6B7A99).withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: const Color(0xFF6B7A99).withOpacity(0.18)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.sort_rounded, size: 12, color: Color(0xFF6B7A99)),
+                          const SizedBox(width: 4),
+                          Text(
+                            sortLabel,
+                            style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 11, fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(width: 3),
+                          const Icon(Icons.keyboard_arrow_down_rounded, size: 12, color: Color(0xFF6B7A99)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -372,112 +469,110 @@ class _ManageSheet extends StatelessWidget {
             // Header
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 22),
-            child: Row(children: [
-              Container(
-                width: 42, height: 42,
-                decoration: BoxDecoration(
-                  color: kTeal.withOpacity(0.14),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: kTeal.withOpacity(0.3), width: 1.5),
+              child: Row(children: [
+                Container(
+                  width: 42, height: 42,
+                  decoration: BoxDecoration(
+                    color: kTeal.withOpacity(0.14),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: kTeal.withOpacity(0.3), width: 1.5),
+                  ),
+                  child: const Icon(Icons.tune_rounded, color: kTeal, size: 21),
                 ),
-                child: const Icon(Icons.tune_rounded, color: kTeal, size: 21),
-              ),
-              const SizedBox(width: 13),
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Sort & Manage', style: TextStyle(color: kWhite, fontSize: 17, fontWeight: FontWeight.bold)),
-                Text('Organise your task list', style: TextStyle(color: kWhite.withOpacity(0.4), fontSize: 12)),
+                const SizedBox(width: 13),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Sort & Manage', style: TextStyle(color: kWhite, fontSize: 17, fontWeight: FontWeight.bold)),
+                  Text('Organise your task list', style: TextStyle(color: kWhite.withOpacity(0.4), fontSize: 12)),
+                ]),
               ]),
-            ]),
-          ),
-
-          const SizedBox(height: 16),
-          Divider(color: kWhite.withOpacity(0.07), thickness: 1, indent: 22, endIndent: 22),
-          const SizedBox(height: 6),
-
-          // Sort by label
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 2, 22, 10),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text('SORT BY', style: TextStyle(color: kWhite.withOpacity(0.28), fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
             ),
-          ),
 
-          // Sort options
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Column(
-              children: _sorts.map((s) {
-                final selected = s.$1 == currentSort;
-                final c = kTeal;
-                return _ManageRow(
-                  icon: s.$2,
-                  iconColor: selected ? c : kWhite.withOpacity(0.4),
-                  label: s.$3,
-                  subtitle: s.$4,
-                  selected: selected,
-                  accentColor: c,
-                  onTap: () => onSortChanged(s.$1),
-                );
-              }).toList(),
-            ),
-          ),
+            const SizedBox(height: 16),
+            Divider(color: kWhite.withOpacity(0.07), thickness: 1, indent: 22, endIndent: 22),
+            const SizedBox(height: 6),
 
-          const SizedBox(height: 4),
-          Divider(color: kWhite.withOpacity(0.07), thickness: 1, indent: 22, endIndent: 22),
-          const SizedBox(height: 6),
-
-          // Actions label
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 2, 22, 10),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text('ACTIONS', style: TextStyle(color: kWhite.withOpacity(0.28), fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
-            ),
-          ),
-
-          // Clear completed
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Column(children: [
-              _ManageRow(
-                icon: Icons.check_circle_outline_rounded,
-                iconColor: hasCompleted ? const Color(0xFF3BBFA3) : kWhite.withOpacity(0.2),
-                label: 'Clear Completed',
-                subtitle: 'Remove all finished tasks',
-                selected: false,
-                accentColor: const Color(0xFF3BBFA3),
-                enabled: hasCompleted,
-                onTap: hasCompleted ? onClearCompleted : null,
-                destructive: false,
+            // Sort by label
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 2, 22, 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('SORT BY', style: TextStyle(color: kWhite.withOpacity(0.28), fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
               ),
-              _ManageRow(
-                icon: Icons.delete_sweep_rounded,
-                iconColor: hasTasks ? const Color(0xFFE87070) : kWhite.withOpacity(0.2),
-                label: 'Clear All Tasks',
-                subtitle: 'Permanently remove everything',
-                selected: false,
-                accentColor: const Color(0xFFE87070),
-                enabled: hasTasks,
-                onTap: hasTasks
-                    ? () => _confirmClearAll(context)
-                    : null,
-                destructive: true,
-              ),
-            ]),
-          ),
+            ),
 
-          const SizedBox(height: 20),
-        ],
-      ),
+            // Sort options
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Column(
+                children: _sorts.map((s) {
+                  final selected = s.$1 == currentSort;
+                  const c = kTeal;
+                  return _ManageRow(
+                    icon: s.$2,
+                    iconColor: selected ? c : kWhite.withOpacity(0.4),
+                    label: s.$3,
+                    subtitle: s.$4,
+                    selected: selected,
+                    accentColor: c,
+                    onTap: () => onSortChanged(s.$1),
+                  );
+                }).toList(),
+              ),
+            ),
+
+            const SizedBox(height: 4),
+            Divider(color: kWhite.withOpacity(0.07), thickness: 1, indent: 22, endIndent: 22),
+            const SizedBox(height: 6),
+
+            // Actions label
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 2, 22, 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('ACTIONS', style: TextStyle(color: kWhite.withOpacity(0.28), fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
+              ),
+            ),
+
+            // Clear completed
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Column(children: [
+                _ManageRow(
+                  icon: Icons.check_circle_outline_rounded,
+                  iconColor: hasCompleted ? const Color(0xFF3BBFA3) : kWhite.withOpacity(0.2),
+                  label: 'Clear Completed',
+                  subtitle: 'Remove all finished tasks',
+                  selected: false,
+                  accentColor: const Color(0xFF3BBFA3),
+                  enabled: hasCompleted,
+                  onTap: hasCompleted ? onClearCompleted : null,
+                  destructive: false,
+                ),
+                _ManageRow(
+                  icon: Icons.delete_sweep_rounded,
+                  iconColor: hasTasks ? const Color(0xFFE87070) : kWhite.withOpacity(0.2),
+                  label: 'Clear All Tasks',
+                  subtitle: 'Permanently remove everything',
+                  selected: false,
+                  accentColor: const Color(0xFFE87070),
+                  enabled: hasTasks,
+                  onTap: hasTasks
+                      ? () => _confirmClearAll(context)
+                      : null,
+                  destructive: true,
+                ),
+              ]),
+            ),
+
+            const SizedBox(height: 20),
+          ],
+        ),
       ),
     );
   }
 
   void _confirmClearAll(BuildContext context) {
     Navigator.pop(context);
-    // Use a post-frame callback so the manage sheet is fully popped
-    // before we push the confirm sheet onto the navigator.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       showModalBottomSheet(
         context: context,
@@ -624,7 +719,7 @@ class _ManageRowState extends State<_ManageRow> {
             )
           else
             Icon(
-              widget.destructive ? Icons.chevron_right_rounded : Icons.chevron_right_rounded,
+              Icons.chevron_right_rounded,
               color: kWhite.withOpacity(widget.enabled ? 0.18 : 0.08), size: 18,
             ),
         ]),
@@ -835,7 +930,6 @@ class _TaskRowState extends State<_TaskRow> {
     if (diff == 0)      dateStr = 'Today';
     else if (diff == 1) dateStr = 'Tomorrow';
     else {
-      // Format like screenshot: MM/DD/YY
       final m  = t.dueDate.month.toString().padLeft(2, '0');
       final d  = t.dueDate.day.toString().padLeft(2, '0');
       final y  = (t.dueDate.year % 100).toString().padLeft(2, '0');
@@ -947,7 +1041,6 @@ class _TaskRowState extends State<_TaskRow> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 0, 14, 20),
                 child: Column(children: [
-                  // Change status
                   _ActionRow(
                     icon: Icons.swap_horiz_rounded,
                     iconColor: kTeal,
@@ -960,7 +1053,6 @@ class _TaskRowState extends State<_TaskRow> {
                       });
                     },
                   ),
-                  // Remove task
                   _ActionRow(
                     icon: Icons.delete_outline_rounded,
                     iconColor: const Color(0xFFE87070),
@@ -1074,7 +1166,6 @@ class _TaskRowState extends State<_TaskRow> {
               Column(
                 children: [
                   const SizedBox(height: 4),
-                  // Status icon circle
                   Container(
                     width: 36, height: 36,
                     decoration: BoxDecoration(
@@ -1084,7 +1175,6 @@ class _TaskRowState extends State<_TaskRow> {
                     ),
                     child: Icon(_statusIcon[task.status]!, color: sColor, size: 18),
                   ),
-                  // Vertical line
                   if (!widget.isLast)
                     Container(
                       width: 2,
@@ -1112,7 +1202,6 @@ class _TaskRowState extends State<_TaskRow> {
                     children: [
                       const SizedBox(height: 6),
 
-                      // Task name
                       Text(
                         task.name,
                         style: TextStyle(
@@ -1127,7 +1216,6 @@ class _TaskRowState extends State<_TaskRow> {
 
                       const SizedBox(height: 5),
 
-                      // Date + optional notes
                       Text(
                         _formatDateRange(task),
                         style: TextStyle(
@@ -1149,10 +1237,8 @@ class _TaskRowState extends State<_TaskRow> {
 
                       const SizedBox(height: 8),
 
-                      // Bottom chips row
                       Row(
                         children: [
-                          // Category chip
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                             decoration: BoxDecoration(
@@ -1165,7 +1251,6 @@ class _TaskRowState extends State<_TaskRow> {
 
                           const SizedBox(width: 6),
 
-                          // Priority dot + label
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                             decoration: BoxDecoration(
@@ -1184,7 +1269,6 @@ class _TaskRowState extends State<_TaskRow> {
 
                           const Spacer(),
 
-                          // ── Status badge — TAPPABLE ──────
                           GestureDetector(
                             onTap: () => _showStatusMenu(context),
                             child: AnimatedContainer(
@@ -1441,7 +1525,6 @@ class _StatusCardState extends State<_StatusCard> {
         ),
         child: Row(
           children: [
-            // Icon bubble
             Container(
               width: 46, height: 46,
               decoration: BoxDecoration(

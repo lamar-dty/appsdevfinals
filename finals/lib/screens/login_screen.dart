@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../constants/colors.dart';
 import '../store/auth_store.dart';
 import 'signup_screen.dart';
@@ -13,11 +14,12 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen>
     with SingleTickerProviderStateMixin {
-  final _emailController = TextEditingController();
+  final _identifierController = TextEditingController();
   final _passController = TextEditingController();
   bool _obscure = true;
   bool _loading = false;
   String? _error;
+  String? _identifierError;
 
   late AnimationController _entryController;
   late Animation<double> _rabbitSlide;
@@ -32,34 +34,100 @@ class _LoginScreenState extends State<LoginScreen>
       duration: const Duration(milliseconds: 900),
     );
     _rabbitSlide = CurvedAnimation(
-        parent: _entryController, curve: const Interval(0.0, 0.6, curve: Curves.easeOutBack));
+        parent: _entryController,
+        curve: const Interval(0.0, 0.6, curve: Curves.easeOutBack));
     _cardSlide = CurvedAnimation(
-        parent: _entryController, curve: const Interval(0.3, 1.0, curve: Curves.easeOutCubic));
+        parent: _entryController,
+        curve: const Interval(0.3, 1.0, curve: Curves.easeOutCubic));
     _cardFade = CurvedAnimation(
-        parent: _entryController, curve: const Interval(0.3, 1.0, curve: Curves.easeIn));
+        parent: _entryController,
+        curve: const Interval(0.3, 1.0, curve: Curves.easeIn));
     _entryController.forward();
   }
 
   @override
   void dispose() {
     _entryController.dispose();
-    _emailController.dispose();
+    _identifierController.dispose();
     _passController.dispose();
     super.dispose();
   }
 
+  /// Returns true if [value] looks like an email address.
+  bool _looksLikeEmail(String value) => value.contains('@');
+
+  /// Validates the identifier field. Returns an error string or null.
+  String? _validateIdentifier(String value) {
+    if (value.isEmpty) return 'Please enter your email or username.';
+    if (_looksLikeEmail(value)) return null; // defer email validation to server
+    // Username rules: lowercase, letters/numbers/underscore, 3-20 chars.
+    final usernameRegex = RegExp(r'^[a-z0-9_]{3,20}$');
+    if (!usernameRegex.hasMatch(value)) {
+      if (value.length < 3) return 'Username must be at least 3 characters.';
+      if (value.length > 20) return 'Username must be 20 characters or fewer.';
+      return 'Username may only contain lowercase letters, numbers, and underscores.';
+    }
+    return null;
+  }
+
+  void _onIdentifierChanged(String value) {
+    // Auto-lowercase when the user types a username (no @).
+    if (!_looksLikeEmail(value)) {
+      final lowered = value.toLowerCase();
+      if (lowered != value) {
+        _identifierController.value = _identifierController.value.copyWith(
+          text: lowered,
+          selection: TextSelection.collapsed(offset: lowered.length),
+        );
+      }
+    }
+    // Clear field-level error on change.
+    if (_identifierError != null) {
+      setState(() => _identifierError = null);
+    }
+  }
+
   Future<void> _login() async {
-    final email = _emailController.text.trim();
-    final pass  = _passController.text;
-    if (email.isEmpty || pass.isEmpty) {
-      setState(() => _error = 'Please enter your email and password.');
+    final raw = _identifierController.text.trim();
+    final identifier =
+        _looksLikeEmail(raw) ? raw : raw.toLowerCase();
+    final pass = _passController.text;
+
+    // Local validation.
+    final idErr = _validateIdentifier(identifier);
+    if (idErr != null) {
+      setState(() {
+        _identifierError = idErr;
+        _error = null;
+      });
       return;
     }
-    setState(() { _loading = true; _error = null; });
-    final err = await AuthStore.instance.login(email: email, password: pass);
+    if (pass.isEmpty) {
+      setState(() {
+        _error = 'Please enter your password.';
+        _identifierError = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+      _identifierError = null;
+    });
+
+    final err = await AuthStore.instance.login(
+      identifier: identifier,
+      password: pass,
+    );
+
     if (!mounted) return;
+
     if (err != null) {
-      setState(() { _loading = false; _error = err; });
+      setState(() {
+        _loading = false;
+        _error = err;
+      });
     } else {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const MainScaffold()),
@@ -112,12 +180,15 @@ class _LoginScreenState extends State<LoginScreen>
                 child: Opacity(
                   opacity: _cardFade.value,
                   child: _LoginCard(
-                    emailController: _emailController,
+                    identifierController: _identifierController,
                     passController: _passController,
                     obscure: _obscure,
                     loading: _loading,
                     error: _error,
-                    onToggleObscure: () => setState(() => _obscure = !_obscure),
+                    identifierError: _identifierError,
+                    onIdentifierChanged: _onIdentifierChanged,
+                    onToggleObscure: () =>
+                        setState(() => _obscure = !_obscure),
                     onLogin: _login,
                     onSignUp: () => Navigator.of(context).push(
                       PageRouteBuilder(
@@ -140,21 +211,25 @@ class _LoginScreenState extends State<LoginScreen>
 
 // ─────────────────────────────────────────────────────────────
 class _LoginCard extends StatelessWidget {
-  final TextEditingController emailController;
+  final TextEditingController identifierController;
   final TextEditingController passController;
   final bool obscure;
   final bool loading;
   final String? error;
+  final String? identifierError;
+  final ValueChanged<String> onIdentifierChanged;
   final VoidCallback onToggleObscure;
   final VoidCallback onLogin;
   final VoidCallback onSignUp;
 
   const _LoginCard({
-    required this.emailController,
+    required this.identifierController,
     required this.passController,
     required this.obscure,
     required this.loading,
     required this.error,
+    required this.identifierError,
+    required this.onIdentifierChanged,
     required this.onToggleObscure,
     required this.onLogin,
     required this.onSignUp,
@@ -180,7 +255,7 @@ class _LoginCard extends StatelessWidget {
         children: [
           // Title
           const Text(
-            'Welcome to Nibble',
+            'Welcome back',
             style: TextStyle(
               fontSize: 26,
               fontWeight: FontWeight.bold,
@@ -188,38 +263,45 @@ class _LoginCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          GestureDetector(
-            child: const Text(
-              'Manage your tasks and budget efficiently',
-              style: TextStyle(
-                fontSize: 12,
-                color: kNavyDark,
-                decoration: TextDecoration.underline,
-              ),
+          const Text(
+            'Sign in to continue to Nibble',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey,
             ),
           ),
           const SizedBox(height: 24),
 
-          // Email
-          const Text('Email',
-              style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: kNavyDark)),
+          // Username or Email
+          const Text(
+            'Username or Email',
+            style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+                color: kNavyDark),
+          ),
           const SizedBox(height: 6),
           _AuthField(
-            controller: emailController,
-            hint: 'Email',
+            controller: identifierController,
+            hint: '@username or email',
             obscure: false,
+            errorText: identifierError,
+            onChanged: onIdentifierChanged,
+            inputFormatters: [
+              // Strip leading whitespace on-the-fly.
+              FilteringTextInputFormatter.deny(RegExp(r'^\s')),
+            ],
           ),
           const SizedBox(height: 16),
 
           // Password
-          const Text('Password',
-              style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: kNavyDark)),
+          const Text(
+            'Password',
+            style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+                color: kNavyDark),
+          ),
           const SizedBox(height: 6),
           _AuthField(
             controller: passController,
@@ -227,7 +309,9 @@ class _LoginCard extends StatelessWidget {
             obscure: obscure,
             suffix: IconButton(
               icon: Icon(
-                obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                obscure
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
                 size: 18,
                 color: Colors.grey,
               ),
@@ -237,8 +321,10 @@ class _LoginCard extends StatelessWidget {
 
           if (error != null) ...[
             const SizedBox(height: 10),
-            Text(error!,
-                style: const TextStyle(color: Colors.red, fontSize: 12)),
+            Text(
+              error!,
+              style: const TextStyle(color: Colors.red, fontSize: 12),
+            ),
           ],
 
           const SizedBox(height: 20),
@@ -296,7 +382,7 @@ class _LoginCard extends StatelessWidget {
                 text: TextSpan(
                   style: const TextStyle(fontSize: 13, color: kNavyDark),
                   children: [
-                    const TextSpan(text: "Don't have an account? "),
+                    const TextSpan(text: "Need an account? "),
                     TextSpan(
                       text: 'Sign Up',
                       style: const TextStyle(
@@ -325,41 +411,70 @@ class _AuthField extends StatelessWidget {
   final String hint;
   final bool obscure;
   final Widget? suffix;
+  final String? errorText;
+  final ValueChanged<String>? onChanged;
+  final List<TextInputFormatter>? inputFormatters;
 
   const _AuthField({
     required this.controller,
     required this.hint,
     required this.obscure,
     this.suffix,
+    this.errorText,
+    this.onChanged,
+    this.inputFormatters,
   });
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      obscureText: obscure,
-      style: const TextStyle(fontSize: 14, color: kNavyDark),
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
-        filled: true,
-        fillColor: const Color(0xFFEFF6F6),
-        suffixIcon: suffix,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: controller,
+          obscureText: obscure,
+          onChanged: onChanged,
+          inputFormatters: inputFormatters,
+          autocorrect: false,
+          enableSuggestions: false,
+          style: const TextStyle(fontSize: 14, color: kNavyDark),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+            filled: true,
+            fillColor: const Color(0xFFEFF6F6),
+            suffixIcon: suffix,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: errorText != null
+                    ? Colors.red.shade300
+                    : kTeal.withOpacity(0.3),
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: errorText != null ? Colors.red : kTeal,
+                width: 1.5,
+              ),
+            ),
+          ),
         ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: kTeal.withOpacity(0.3)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: kTeal, width: 1.5),
-        ),
-      ),
+        if (errorText != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            errorText!,
+            style: const TextStyle(color: Colors.red, fontSize: 11),
+          ),
+        ],
+      ],
     );
   }
 }

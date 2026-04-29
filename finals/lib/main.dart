@@ -130,7 +130,7 @@ class _MainScaffoldState extends State<MainScaffold> {
         tabNotifier: _tabNotifier,
       ),
       SpacesScreen(key: _spacesKey, tabNotifier: _tabNotifier),
-      const WalletScreen(),
+      WalletScreen(tabNotifier: _tabNotifier),
     ];
   }
 

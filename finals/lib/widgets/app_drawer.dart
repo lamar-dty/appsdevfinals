@@ -145,15 +145,35 @@ class _AppDrawerState extends State<AppDrawer>
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(AuthStore.instance.displayName,
-                              style: const TextStyle(
-                                  color: kWhite,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold)),
+                          // Primary identity: username only.
+                          Text(
+                            AuthStore.instance.username.isNotEmpty
+                                ? AuthStore.instance.username
+                                : 'Unknown',
+                            style: const TextStyle(
+                                color: kWhite,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold),
+                          ),
                           const SizedBox(height: 2),
-                          Text(AuthStore.instance.userTag,
-                              style:
-                                  const TextStyle(color: kWhite, fontSize: 12)),
+                          // Secondary identity: Discord-style username#tag.
+                          () {
+                            final tag      = AuthStore.instance.userTag;
+                            final username = AuthStore.instance.username;
+                            if (username.isNotEmpty && tag.isNotEmpty) {
+                              return Text(
+                                '$username$tag',
+                                style: const TextStyle(
+                                    color: kWhite, fontSize: 12),
+                              );
+                            }
+                            if (tag.isNotEmpty) {
+                              return Text(tag,
+                                  style: const TextStyle(
+                                      color: kWhite, fontSize: 12));
+                            }
+                            return const SizedBox.shrink();
+                          }(),
                           Text(AuthStore.instance.displayEmail,
                               style:
                                   const TextStyle(color: kWhite, fontSize: 12)),

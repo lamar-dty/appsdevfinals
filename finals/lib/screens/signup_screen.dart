@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../constants/colors.dart';
 import '../store/auth_store.dart';
 import 'login_screen.dart';
@@ -13,16 +14,22 @@ class SignupScreen extends StatefulWidget {
 
 class _SignupScreenState extends State<SignupScreen>
     with SingleTickerProviderStateMixin {
-  final _nameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _passController = TextEditingController();
-  bool _obscure = true;
-  bool _loading = false;
+  final _usernameController = TextEditingController();
+  final _emailController    = TextEditingController();
+  final _passController     = TextEditingController();
+
+  bool _obscure  = true;
+  bool _loading  = false;
   String? _error;
 
+  // Per-field inline validation state.
+  String? _usernameError;
+  bool    _usernameAvailable = false;
+  bool    _usernameDirty     = false; // true once user has typed at least once
+
   late AnimationController _entryController;
-  late Animation<double> _cardFade;
-  late Animation<double> _cardSlide;
+  late Animation<double>   _cardFade;
+  late Animation<double>   _cardSlide;
 
   @override
   void initState() {
@@ -31,25 +38,69 @@ class _SignupScreenState extends State<SignupScreen>
       vsync: this,
       duration: const Duration(milliseconds: 500),
     );
-    _cardFade = CurvedAnimation(parent: _entryController, curve: Curves.easeIn);
+    _cardFade  = CurvedAnimation(parent: _entryController, curve: Curves.easeIn);
     _cardSlide = CurvedAnimation(parent: _entryController, curve: Curves.easeOutCubic);
     _entryController.forward();
+
+    _usernameController.addListener(_onUsernameChanged);
   }
 
   @override
   void dispose() {
     _entryController.dispose();
-    _nameController.dispose();
+    _usernameController.dispose();
     _emailController.dispose();
     _passController.dispose();
     super.dispose();
   }
 
+  // ── Live username validation ──────────────────────────────
+
+  void _onUsernameChanged() {
+    if (!mounted) return;
+    final raw = _usernameController.text;
+    if (!_usernameDirty && raw.isEmpty) return;
+    _usernameDirty = true;
+
+    final formatError = AuthStore.instance.validateUsernameInput(raw);
+    if (formatError != null) {
+      setState(() {
+        _usernameError     = formatError;
+        _usernameAvailable = false;
+      });
+      return;
+    }
+
+    final available = AuthStore.instance.isUsernameAvailable(raw);
+    setState(() {
+      _usernameError     = available ? null : 'That username is already taken.';
+      _usernameAvailable = available;
+    });
+  }
+
+  // ── Submit ────────────────────────────────────────────────
+
   Future<void> _createAccount() async {
-    final name  = _nameController.text.trim();
-    final email = _emailController.text.trim();
-    final pass  = _passController.text;
-    if (name.isEmpty || email.isEmpty || pass.isEmpty) {
+    final username = _usernameController.text.trim();
+    final email    = _emailController.text.trim();
+    final pass     = _passController.text;
+
+    // Force dirty and run validation synchronously so the inline
+    // error state is correct before we read it below.
+    setState(() {
+      _usernameDirty = true;
+      final formatError = AuthStore.instance.validateUsernameInput(username);
+      if (formatError != null) {
+        _usernameError     = formatError;
+        _usernameAvailable = false;
+      } else {
+        final available = AuthStore.instance.isUsernameAvailable(username);
+        _usernameError     = available ? null : 'That username is already taken.';
+        _usernameAvailable = available;
+      }
+    });
+
+    if (username.isEmpty || email.isEmpty || pass.isEmpty) {
       setState(() => _error = 'Please fill in all fields.');
       return;
     }
@@ -58,17 +109,35 @@ class _SignupScreenState extends State<SignupScreen>
       setState(() => _error = 'Please enter a valid email address.');
       return;
     }
+    final usernameFormatError = AuthStore.instance.validateUsernameInput(username);
+    if (usernameFormatError != null) {
+      setState(() => _error = usernameFormatError);
+      return;
+    }
+    if (!AuthStore.instance.isUsernameAvailable(username)) {
+      setState(() => _error = 'That username is already taken.');
+      return;
+    }
+    if (pass.length < 6) {
+      setState(() => _error = 'Password must be at least 6 characters.');
+      return;
+    }
+
     setState(() { _loading = true; _error = null; });
+
+    // Pass username as both `name` (legacy param) and `username` so the
+    // store's backwards-compatibility path is never triggered.
     final err = await AuthStore.instance.signUp(
-      name: name,
-      email: email,
+      name:     username,
+      username: username,
+      email:    email,
       password: pass,
     );
+
     if (!mounted) return;
     if (err != null) {
       setState(() { _loading = false; _error = err; });
     } else {
-      // Signed up and auto-logged in — go straight to main app.
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const MainScaffold()),
         (route) => false,
@@ -119,15 +188,17 @@ class _SignupScreenState extends State<SignupScreen>
                   opacity: _cardFade.value,
                   child: SingleChildScrollView(
                     child: _SignupCard(
-                      nameController: _nameController,
-                      emailController: _emailController,
-                      passController: _passController,
-                      obscure: _obscure,
-                      loading: _loading,
-                      error: _error,
+                      usernameController: _usernameController,
+                      emailController:    _emailController,
+                      passController:     _passController,
+                      obscure:            _obscure,
+                      loading:            _loading,
+                      error:              _error,
+                      usernameError:      _usernameDirty ? _usernameError : null,
+                      usernameAvailable:  _usernameDirty && _usernameAvailable,
                       onToggleObscure: () => setState(() => _obscure = !_obscure),
                       onCreate: _createAccount,
-                      onLogin: () => Navigator.of(context).pop(),
+                      onLogin:  () => Navigator.of(context).pop(),
                     ),
                   ),
                 ),
@@ -142,23 +213,27 @@ class _SignupScreenState extends State<SignupScreen>
 
 // ─────────────────────────────────────────────────────────────
 class _SignupCard extends StatelessWidget {
-  final TextEditingController nameController;
+  final TextEditingController usernameController;
   final TextEditingController emailController;
   final TextEditingController passController;
-  final bool obscure;
-  final bool loading;
+  final bool    obscure;
+  final bool    loading;
   final String? error;
+  final String? usernameError;
+  final bool    usernameAvailable;
   final VoidCallback onToggleObscure;
   final VoidCallback onCreate;
   final VoidCallback onLogin;
 
   const _SignupCard({
-    required this.nameController,
+    required this.usernameController,
     required this.emailController,
     required this.passController,
     required this.obscure,
     required this.loading,
     required this.error,
+    required this.usernameError,
+    required this.usernameAvailable,
     required this.onToggleObscure,
     required this.onCreate,
     required this.onLogin,
@@ -184,7 +259,7 @@ class _SignupCard extends StatelessWidget {
         children: [
           // Title
           const Text(
-            'Welcome to Nibble',
+            'Create your account',
             style: TextStyle(
               fontSize: 26,
               fontWeight: FontWeight.bold,
@@ -196,46 +271,57 @@ class _SignupCard extends StatelessWidget {
             'Manage your tasks and budget efficiently',
             style: TextStyle(
               fontSize: 12,
-              color: kNavyDark,
-              decoration: TextDecoration.underline,
+              color: Colors.grey,
             ),
           ),
           const SizedBox(height: 22),
 
-          // Name
-          const Text('Name',
-              style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: kNavyDark)),
+          // ── Username ──────────────────────────────────────
+          _FieldLabel(label: 'Username'),
           const SizedBox(height: 6),
-          _AuthField(controller: nameController, hint: 'Name', obscure: false),
+          _UsernameField(
+            controller:  usernameController,
+            error:       usernameError,
+            isAvailable: usernameAvailable,
+          ),
+          if (usernameError != null) ...[
+            const SizedBox(height: 5),
+            _InlineMessage(message: usernameError!, isError: true),
+          ] else if (usernameAvailable) ...[
+            const SizedBox(height: 5),
+            _InlineMessage(message: 'Username is available!', isError: false),
+          ] else ...[
+            const SizedBox(height: 5),
+            const Text(
+              'Lowercase letters, numbers, and underscores only · 3–20 chars',
+              style: TextStyle(fontSize: 11, color: Colors.grey),
+            ),
+          ],
           const SizedBox(height: 14),
 
-          // Email
-          const Text('Email',
-              style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: kNavyDark)),
+          // ── Email ─────────────────────────────────────────
+          _FieldLabel(label: 'Email'),
           const SizedBox(height: 6),
-          _AuthField(controller: emailController, hint: 'Email', obscure: false),
+          _AuthField(
+            controller: emailController,
+            hint: 'you@example.com',
+            obscure: false,
+            keyboardType: TextInputType.emailAddress,
+          ),
           const SizedBox(height: 14),
 
-          // Password
-          const Text('Password',
-              style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                  color: kNavyDark)),
+          // ── Password ──────────────────────────────────────
+          _FieldLabel(label: 'Password'),
           const SizedBox(height: 6),
           _AuthField(
             controller: passController,
-            hint: 'Password',
+            hint: 'At least 6 characters',
             obscure: obscure,
             suffix: IconButton(
               icon: Icon(
-                obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                obscure
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
                 size: 18,
                 color: Colors.grey,
               ),
@@ -251,7 +337,7 @@ class _SignupCard extends StatelessWidget {
 
           const SizedBox(height: 20),
 
-          // Create Account button
+          // ── Create Account button ─────────────────────────
           SizedBox(
             width: double.infinity,
             height: 50,
@@ -282,7 +368,7 @@ class _SignupCard extends StatelessWidget {
 
           const SizedBox(height: 16),
 
-          // OR divider
+          // ── OR divider ────────────────────────────────────
           Row(
             children: [
               Expanded(child: Divider(color: Colors.grey.shade300)),
@@ -297,7 +383,7 @@ class _SignupCard extends StatelessWidget {
 
           const SizedBox(height: 16),
 
-          // Social icons
+          // ── Social icons ──────────────────────────────────
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -311,7 +397,7 @@ class _SignupCard extends StatelessWidget {
 
           const SizedBox(height: 18),
 
-          // Log in link
+          // ── Log in link ───────────────────────────────────
           Center(
             child: GestureDetector(
               onTap: onLogin,
@@ -341,31 +427,168 @@ class _SignupCard extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Username field — enforces lowercase input at the OS level
+// and shows a trailing availability indicator.
+// ─────────────────────────────────────────────────────────────
+class _UsernameField extends StatelessWidget {
+  final TextEditingController controller;
+  final String? error;
+  final bool    isAvailable;
+
+  const _UsernameField({
+    required this.controller,
+    required this.error,
+    required this.isAvailable,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasError = error != null;
+    final borderColor = hasError
+        ? Colors.red
+        : isAvailable
+            ? Colors.green
+            : kTeal.withOpacity(0.3);
+    final focusBorderColor =
+        hasError ? Colors.red : isAvailable ? Colors.green : kTeal;
+
+    Widget? trailing;
+    if (controller.text.isNotEmpty) {
+      if (hasError) {
+        trailing = const Icon(Icons.cancel_outlined, size: 18, color: Colors.red);
+      } else if (isAvailable) {
+        trailing = const Icon(Icons.check_circle_outline,
+            size: 18, color: Colors.green);
+      }
+    }
+
+    return TextField(
+      controller:  controller,
+      // Force lowercase at the input level — never rely on the user.
+      inputFormatters: [
+        FilteringTextInputFormatter.allow(RegExp(r'[a-z0-9_]')),
+        _LowercaseFormatter(),
+      ],
+      autocorrect: false,
+      enableSuggestions: false,
+      style: const TextStyle(fontSize: 14, color: kNavyDark),
+      decoration: InputDecoration(
+        hintText: 'e.g. jane_doe (lowercase letters)',
+        hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+        prefixText: '@',
+        prefixStyle: const TextStyle(
+            color: kTeal, fontWeight: FontWeight.w600, fontSize: 14),
+        filled:      true,
+        fillColor:   const Color(0xFFEFF6F6),
+        suffixIcon:  trailing,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: borderColor),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: focusBorderColor, width: 1.5),
+        ),
+      ),
+    );
+  }
+}
+
+// Forces any typed character to lowercase before it reaches the field.
+class _LowercaseFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    return newValue.copyWith(text: newValue.text.toLowerCase());
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Shared field label
+// ─────────────────────────────────────────────────────────────
+class _FieldLabel extends StatelessWidget {
+  final String label;
+  const _FieldLabel({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: const TextStyle(
+          fontWeight: FontWeight.w600, fontSize: 14, color: kNavyDark),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Inline validation message (error or success)
+// ─────────────────────────────────────────────────────────────
+class _InlineMessage extends StatelessWidget {
+  final String message;
+  final bool   isError;
+  const _InlineMessage({required this.message, required this.isError});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(
+          isError ? Icons.error_outline : Icons.check_circle_outline,
+          size: 13,
+          color: isError ? Colors.red : Colors.green,
+        ),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(
+            message,
+            style: TextStyle(
+              fontSize: 11,
+              color: isError ? Colors.red : Colors.green,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Reused auth field
 // ─────────────────────────────────────────────────────────────
 class _AuthField extends StatelessWidget {
   final TextEditingController controller;
-  final String hint;
-  final bool obscure;
+  final String  hint;
+  final bool    obscure;
   final Widget? suffix;
+  final TextInputType keyboardType;
 
   const _AuthField({
     required this.controller,
     required this.hint,
     required this.obscure,
     this.suffix,
+    this.keyboardType = TextInputType.text,
   });
 
   @override
   Widget build(BuildContext context) {
     return TextField(
-      controller: controller,
-      obscureText: obscure,
+      controller:   controller,
+      obscureText:  obscure,
+      keyboardType: keyboardType,
+      autocorrect:  false,
+      enableSuggestions: false,
       style: const TextStyle(fontSize: 14, color: kNavyDark),
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
-        filled: true,
+        filled:    true,
         fillColor: const Color(0xFFEFF6F6),
         suffixIcon: suffix,
         contentPadding:
@@ -399,16 +622,16 @@ class _SocialButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 48,
+      width:  48,
       height: 48,
       decoration: BoxDecoration(
         color: icon == _SocialIcon.x ? Colors.black : Colors.white,
         shape: BoxShape.circle,
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(0.10),
+              color:      Colors.black.withOpacity(0.10),
               blurRadius: 6,
-              offset: const Offset(0, 2))
+              offset:     const Offset(0, 2))
         ],
       ),
       child: Center(child: _iconWidget()),

@@ -1,32 +1,18 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import '../constants/colors.dart';
+import '../widgets/wallet/wallet_sheet.dart';
 
 // ─────────────────────────────────────────────────────────────
-// Data models
+// Re-export public types so call-sites that imported them from
+// wallet_screen.dart continue to compile without changes.
 // ─────────────────────────────────────────────────────────────
-enum _ExpenseStatus { overdue, unpaid, paid, deducted }
+export '../widgets/wallet/wallet_sheet.dart'
+    show WalletExpense, WalletExpenseStatus;
 
-class _Expense {
-  final String name;
-  final double amount;
-  final String? savingNote;   // e.g. "Save ₱16.67 daily"
-  final String dateRange;
-  final _ExpenseStatus status;
-  final IconData icon;
-  final Color iconColor;
-
-  const _Expense({
-    required this.name,
-    required this.amount,
-    required this.dateRange,
-    required this.status,
-    required this.icon,
-    required this.iconColor,
-    this.savingNote,
-  });
-}
-
+// ─────────────────────────────────────────────────────────────
+// Private background-only data models
+// ─────────────────────────────────────────────────────────────
 class _BudgetCategory {
   final String label;
   final double amount;
@@ -53,7 +39,7 @@ class _HighPriorityBreakdown {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Sample data (matching screenshot)
+// Sample data
 // ─────────────────────────────────────────────────────────────
 const _kDailyAllowance = 0.0;
 const _kSavings        = 0.0;
@@ -61,20 +47,32 @@ const _kMonthlyBudget  = 0.0;
 const _kBudgetUsed     = 0.0;
 
 const List<_BudgetCategory> _kBudgetCategories = [];
-
 const List<_HighPriorityBreakdown> _kHighPriorityBreakdown = [];
-
 final List<_SavingsPoint> _kSavingsHistory = [];
 
-const List<_Expense> _kUpcoming   = [];
-const List<_Expense> _kRecent     = [];
-const List<_Expense> _kDeductions = [];
+const List<WalletExpense> _kUpcoming   = [];
+const List<WalletExpense> _kRecent     = [];
+const List<WalletExpense> _kDeductions = [];
 
 // ─────────────────────────────────────────────────────────────
 // Screen
 // ─────────────────────────────────────────────────────────────
+// Owns:
+//   • tabNotifier listener + _onTabChanged collapse logic
+//   • DraggableScrollableController + snapping logic
+//   • scroll-reset guard on tab navigation
+//   • DecoratedBox → ClipRRect → ColoredBox → WalletSheet structure
+//   • background summary cards / charts
+//
+// Does NOT own:
+//   • CustomScrollView (lives in WalletSheet)
+//   • SliverAppBar     (lives in WalletSheet)
+//   • expense sections (live in WalletSheet)
+// ─────────────────────────────────────────────────────────────
 class WalletScreen extends StatefulWidget {
-  const WalletScreen({super.key});
+  final ValueNotifier<int> tabNotifier;
+
+  const WalletScreen({super.key, required this.tabNotifier});
 
   @override
   State<WalletScreen> createState() => _WalletScreenState();
@@ -88,6 +86,11 @@ class _WalletScreenState extends State<WalletScreen> {
   late DraggableScrollableController _sheetController;
   double _sheetSize = _snapPeek;
 
+  // Holds the ScrollController provided by DraggableScrollableSheet's builder.
+  // Retained so a future tab-change listener can reset scroll to top before
+  // collapsing the sheet, keeping the drag handle always visible.
+  ScrollController? _sheetScrollController;
+
   @override
   void initState() {
     super.initState();
@@ -95,12 +98,49 @@ class _WalletScreenState extends State<WalletScreen> {
     _sheetController.addListener(() {
       if (mounted) setState(() => _sheetSize = _sheetController.size);
     });
+    widget.tabNotifier.addListener(_onTabChanged);
   }
 
   @override
   void dispose() {
+    widget.tabNotifier.removeListener(_onTabChanged);
     _sheetController.dispose();
     super.dispose();
+  }
+
+  // Collapse sheet when navigating away from the Wallet tab (index 3).
+  // Resets the internal scroll position to top first so the drag handle is
+  // always visible after the sheet collapses.
+  void _onTabChanged() {
+    if (!mounted) return;
+    if (widget.tabNotifier.value == 3) return; // staying on wallet tab — no-op
+    if (!_sheetController.isAttached) return;
+
+    // Reset the expense list scroll to top before collapsing.
+    // Guards: controller must have clients and position pixels must be above
+    // minScrollExtent to avoid jumpTo exceptions on already-topped lists.
+    _resetScrollToTop();
+
+    _sheetController.animateTo(
+      _snapPeek,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+  }
+
+  // Scroll-reset guard — called by _onTabChanged before animateTo(_snapPeek).
+  // Mirrors the pattern in HomeScreen / SpacesScreen.
+  void _resetScrollToTop() {
+    final sc = _sheetScrollController;
+    if (sc == null || !sc.hasClients) return;
+    try {
+      final pos = sc.position;
+      if (pos.pixels > pos.minScrollExtent) {
+        sc.jumpTo(pos.minScrollExtent);
+      }
+    } catch (_) {
+      // Controller detached or position unavailable — safe to ignore.
+    }
   }
 
   @override
@@ -120,7 +160,13 @@ class _WalletScreenState extends State<WalletScreen> {
           ),
         ),
 
-        // ── DRAGGABLE SHEET ───────────────────────────────────
+        // ── DRAGGABLE WALLET SHEET ────────────────────────────────────────
+        // Canonical architecture: DecoratedBox (shadow) → ClipRRect (rounded
+        // corners) → ColoredBox → WalletSheet (CustomScrollView root).
+        // The DraggableScrollableSheet scrollController is cached in
+        // _sheetScrollController and passed directly into WalletSheet so it
+        // attaches to the CustomScrollView root — the only scrollable that
+        // drives sheet drag, header pinning, and list scroll from one axis.
         DraggableScrollableSheet(
           controller: _sheetController,
           initialChildSize: _snapPeek,
@@ -129,13 +175,10 @@ class _WalletScreenState extends State<WalletScreen> {
           snap: true,
           snapSizes: const [_snapPeek, _snapHalf, _snapFull],
           builder: (context, scrollController) {
-            return Container(
+            // Cache for scroll-reset guard.
+            _sheetScrollController = scrollController;
+            return DecoratedBox(
               decoration: const BoxDecoration(
-                color: kWhite,
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(28),
-                  topRight: Radius.circular(28),
-                ),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black26,
@@ -144,10 +187,24 @@ class _WalletScreenState extends State<WalletScreen> {
                   ),
                 ],
               ),
-              child: SingleChildScrollView(
-                controller: scrollController,
-                physics: const ClampingScrollPhysics(),
-                child: const _WalletSheet(),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(28),
+                  topRight: Radius.circular(28),
+                ),
+                child: ColoredBox(
+                  color: kWhite,
+                  child: WalletSheet(
+                    scrollController: scrollController,
+                    dailyAllowance: _kDailyAllowance,
+                    savings: _kSavings,
+                    monthlyBudget: _kMonthlyBudget,
+                    budgetUsed: _kBudgetUsed,
+                    upcoming: _kUpcoming,
+                    recent: _kRecent,
+                    deductions: _kDeductions,
+                  ),
+                ),
               ),
             );
           },
@@ -173,7 +230,6 @@ class _WalletBackground extends StatelessWidget {
           // ── Summary cards row ─────────────────────────────
           Row(
             children: [
-              // Daily Allowance
               Expanded(
                 child: _SummaryCard(
                   icon: Icons.credit_card_rounded,
@@ -184,7 +240,6 @@ class _WalletBackground extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              // Savings
               Expanded(
                 child: _SummaryCard(
                   icon: Icons.savings_rounded,
@@ -195,7 +250,6 @@ class _WalletBackground extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              // Monthly Budget
               Expanded(
                 child: _SummaryCard(
                   icon: Icons.account_balance_wallet_rounded,
@@ -218,7 +272,7 @@ class _WalletBackground extends StatelessWidget {
             title: 'Budget Allocation',
             action: 'Edit',
             child: _kBudgetCategories.isEmpty
-                ? _EmptyState(
+                ? const _EmptyState(
                     icon: Icons.bar_chart_rounded,
                     message: 'No budget set yet',
                   )
@@ -238,10 +292,12 @@ class _WalletBackground extends StatelessWidget {
           // ── Savings overview line graph ───────────────────
           _SectionCard(
             title: 'Savings Overview',
-            child: _EmptyState(
-              icon: Icons.show_chart_rounded,
-              message: 'No savings recorded yet',
-            ),
+            child: _kSavingsHistory.isEmpty
+                ? const _EmptyState(
+                    icon: Icons.show_chart_rounded,
+                    message: 'No savings recorded yet',
+                  )
+                : _SavingsChart(points: _kSavingsHistory),
           ),
 
           const SizedBox(height: 12),
@@ -252,71 +308,7 @@ class _WalletBackground extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Sheet: Upcoming / Recent / Savings Deduction
-// ─────────────────────────────────────────────────────────────
-class _WalletSheet extends StatelessWidget {
-  const _WalletSheet();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Drag handle
-        Center(
-          child: Container(
-            width: 40,
-            height: 4,
-            margin: const EdgeInsets.only(top: 12, bottom: 20),
-            decoration: BoxDecoration(
-              color: Colors.grey.withOpacity(0.3),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-        ),
-
-        // Upcoming Expenses
-        _SheetSectionHeader(title: 'Upcoming Expenses', onSort: () {}),
-        const SizedBox(height: 8),
-        _kUpcoming.isEmpty
-            ? _SheetEmptyState(
-                icon: Icons.event_available_rounded,
-                message: 'No upcoming expenses',
-              )
-            : Column(children: _kUpcoming.map((e) => _ExpenseItem(expense: e)).toList()),
-
-        const SizedBox(height: 20),
-
-        // Recent Expenses
-        _SheetSectionHeader(title: 'Recent Expenses', onSort: () {}),
-        const SizedBox(height: 8),
-        _kRecent.isEmpty
-            ? _SheetEmptyState(
-                icon: Icons.receipt_long_rounded,
-                message: 'No recent expenses',
-              )
-            : Column(children: _kRecent.map((e) => _ExpenseItem(expense: e)).toList()),
-
-        const SizedBox(height: 20),
-
-        // Savings Deduction
-        _SheetSectionHeader(title: 'Savings Deduction', onSort: () {}),
-        const SizedBox(height: 8),
-        _kDeductions.isEmpty
-            ? _SheetEmptyState(
-                icon: Icons.savings_rounded,
-                message: 'No deductions yet',
-              )
-            : Column(children: _kDeductions.map((e) => _ExpenseItem(expense: e)).toList()),
-
-        const SizedBox(height: 80),
-      ],
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Summary card (top row)
+// Summary card (top row — navy background)
 // ─────────────────────────────────────────────────────────────
 class _SummaryCard extends StatelessWidget {
   final IconData icon;
@@ -486,12 +478,10 @@ class _BarChart extends StatelessWidget {
       height: 170,
       child: Column(
         children: [
-          // Chart area
           SizedBox(
             height: chartH,
             child: Stack(
               children: [
-                // Grid lines
                 ...gridLines.map((v) {
                   final y = chartH - (v / maxVal) * chartH;
                   return Positioned(
@@ -522,8 +512,6 @@ class _BarChart extends StatelessWidget {
                     ),
                   );
                 }),
-
-                // Bars
                 Positioned.fill(
                   left: 28,
                   child: Row(
@@ -561,10 +549,7 @@ class _BarChart extends StatelessWidget {
               ],
             ),
           ),
-
           const SizedBox(height: 8),
-
-          // X-axis labels
           Padding(
             padding: const EdgeInsets.only(left: 28),
             child: Row(
@@ -605,15 +590,11 @@ class _HighPrioritySection extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        // Donut (takes up left portion)
         Expanded(
           flex: 5,
           child: _HighPriorityDonut(items: items),
         ),
-
         const SizedBox(width: 12),
-
-        // Balance cards stacked on the right
         Expanded(
           flex: 3,
           child: Column(
@@ -630,11 +611,11 @@ class _HighPrioritySection extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Small rounded balance card (e.g. Academics / Discretionary)
+// Small rounded balance card
 // ─────────────────────────────────────────────────────────────
 class _BalanceCard extends StatelessWidget {
   final String label;
-  final double? balance; // null = empty state
+  final double? balance;
 
   const _BalanceCard({required this.label, this.balance});
 
@@ -699,7 +680,6 @@ class _HighPriorityDonut extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        // Donut — always shown
         SizedBox(
           width: 100,
           height: 100,
@@ -710,7 +690,9 @@ class _HighPriorityDonut extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    isEmpty ? '0%' : '${(items.reduce((a, b) => a.amount > b.amount ? a : b).amount / total * 100).round()}%',
+                    isEmpty
+                        ? '0%'
+                        : '${(items.reduce((a, b) => a.amount > b.amount ? a : b).amount / total * 100).round()}%',
                     style: const TextStyle(
                       color: kWhite,
                       fontSize: 18,
@@ -718,7 +700,9 @@ class _HighPriorityDonut extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    isEmpty ? 'No data' : items.reduce((a, b) => a.amount > b.amount ? a : b).label,
+                    isEmpty
+                        ? 'No data'
+                        : items.reduce((a, b) => a.amount > b.amount ? a : b).label,
                     style: TextStyle(
                       color: kWhite.withOpacity(0.6),
                       fontSize: 9,
@@ -732,58 +716,57 @@ class _HighPriorityDonut extends StatelessWidget {
 
         const SizedBox(width: 10),
 
-        // Legend — empty state text when no items
         Flexible(
           child: isEmpty
-            ? Text(
-                'No expenses\nadded yet',
-                style: TextStyle(
-                  color: kWhite.withOpacity(0.3),
-                  fontSize: 12,
-                ),
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: items
-                    .map((item) => Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 8,
-                                height: 8,
-                                decoration: BoxDecoration(
-                                  color: item.color,
-                                  shape: BoxShape.circle,
+              ? Text(
+                  'No expenses\nadded yet',
+                  style: TextStyle(
+                    color: kWhite.withOpacity(0.3),
+                    fontSize: 12,
+                  ),
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: items
+                      .map((item) => Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: item.color,
+                                    shape: BoxShape.circle,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    item.label,
-                                    style: const TextStyle(
-                                      color: kWhite,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
+                                const SizedBox(width: 8),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.label,
+                                      style: const TextStyle(
+                                        color: kWhite,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
-                                  ),
-                                  Text(
-                                    '₱${item.amount.toStringAsFixed(2)}',
-                                    style: TextStyle(
-                                      color: kWhite.withOpacity(0.5),
-                                      fontSize: 11,
+                                    Text(
+                                      '₱${item.amount.toStringAsFixed(2)}',
+                                      style: TextStyle(
+                                        color: kWhite.withOpacity(0.5),
+                                        fontSize: 11,
+                                      ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ))
-                    .toList(),
-              ),
-          ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ))
+                      .toList(),
+                ),
+        ),
       ],
     );
   }
@@ -803,7 +786,6 @@ class _HighPriorityDonutPainter extends CustomPainter {
     const pi = math.pi;
     final rect = Rect.fromCircle(center: center, radius: radius);
 
-    // Unified grey track ring (always drawn)
     canvas.drawArc(rect, 0, 2 * pi, false,
         Paint()
           ..style = PaintingStyle.stroke
@@ -860,13 +842,12 @@ class _SavingsLinePainter extends CustomPainter {
     if (points.isEmpty) return;
 
     final gridValues = [0.0, 10.0, 100.0, 1000.0, 10000.0];
-    final maxVal = 10000.0;
+    const maxVal = 10000.0;
     const leftPad = 36.0;
     const bottomPad = 20.0;
     final chartW = size.width - leftPad;
     final chartH = size.height - bottomPad;
 
-    // Log scale helper
     double logY(double v) {
       if (v <= 0) return chartH;
       final logMax = math.log(maxVal + 1);
@@ -883,20 +864,20 @@ class _SavingsLinePainter extends CustomPainter {
       fontSize: 8,
     );
 
-    // Grid lines + Y labels
     for (final v in gridValues) {
       final y = logY(v);
       canvas.drawLine(Offset(leftPad, y), Offset(size.width, y), gridPaint);
       final tp = TextPainter(
         text: TextSpan(
-            text: v >= 1000 ? '${(v / 1000).toStringAsFixed(0)}k' : v.toStringAsFixed(0),
+            text: v >= 1000
+                ? '${(v / 1000).toStringAsFixed(0)}k'
+                : v.toStringAsFixed(0),
             style: labelStyle),
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, Offset(0, y - 5));
     }
 
-    // X labels
     for (int i = 0; i < points.length; i++) {
       final x = leftPad + (i / (points.length - 1)) * chartW;
       final tp = TextPainter(
@@ -906,7 +887,6 @@ class _SavingsLinePainter extends CustomPainter {
       tp.paint(canvas, Offset(x - tp.width / 2, size.height - 14));
     }
 
-    // Build path
     final path = Path();
     final fillPath = Path();
     final pts = <Offset>[];
@@ -931,7 +911,6 @@ class _SavingsLinePainter extends CustomPainter {
     fillPath.lineTo(pts.last.dx, chartH);
     fillPath.close();
 
-    // Fill
     canvas.drawPath(
       fillPath,
       Paint()
@@ -945,7 +924,6 @@ class _SavingsLinePainter extends CustomPainter {
         ).createShader(Rect.fromLTWH(0, 0, size.width, size.height)),
     );
 
-    // Line
     canvas.drawPath(
       path,
       Paint()
@@ -956,7 +934,6 @@ class _SavingsLinePainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round,
     );
 
-    // Dots
     for (final pt in pts) {
       canvas.drawCircle(pt, 3, Paint()..color = kTeal);
       canvas.drawCircle(
@@ -974,50 +951,7 @@ class _SavingsLinePainter extends CustomPainter {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Sheet section header
-// ─────────────────────────────────────────────────────────────
-class _SheetSectionHeader extends StatelessWidget {
-  final String title;
-  final VoidCallback? onSort;
-
-  const _SheetSectionHeader({required this.title, this.onSort});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: kNavyDark,
-              fontSize: 17,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          GestureDetector(
-            onTap: onSort,
-            child: Row(
-              children: const [
-                Text('Sorted by',
-                    style:
-                        TextStyle(color: Color(0xFF6B7A99), fontSize: 12)),
-                SizedBox(width: 3),
-                Icon(Icons.arrow_drop_down,
-                    color: Color(0xFF6B7A99), size: 18),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Empty state — inside navy section card (background)
+// Empty state — inside navy section card (background only)
 // ─────────────────────────────────────────────────────────────
 class _EmptyState extends StatelessWidget {
   final IconData icon;
@@ -1031,6 +965,7 @@ class _EmptyState extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 24),
       child: Center(
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, size: 40, color: kWhite.withOpacity(0.12)),
             const SizedBox(height: 10),
@@ -1040,193 +975,6 @@ class _EmptyState extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Empty state — inside white sheet
-// ─────────────────────────────────────────────────────────────
-class _SheetEmptyState extends StatelessWidget {
-  final IconData icon;
-  final String message;
-
-  const _SheetEmptyState({required this.icon, required this.message});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 20),
-      child: Center(
-        child: Column(
-          children: [
-            Icon(icon, size: 36, color: kNavyDark.withOpacity(0.1)),
-            const SizedBox(height: 8),
-            Text(
-              message,
-              style: TextStyle(color: kNavyDark.withOpacity(0.3), fontSize: 13),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Expense item row (with dashed connector)
-// ─────────────────────────────────────────────────────────────
-class _ExpenseItem extends StatelessWidget {
-  final _Expense expense;
-
-  const _ExpenseItem({required this.expense});
-
-  Color get _badgeColor {
-    switch (expense.status) {
-      case _ExpenseStatus.overdue:
-        return const Color(0xFFE87070);
-      case _ExpenseStatus.unpaid:
-        return const Color(0xFF4A90D9);
-      case _ExpenseStatus.paid:
-        return const Color(0xFF3BBFA3);
-      case _ExpenseStatus.deducted:
-        return const Color(0xFF9B88E8);
-    }
-  }
-
-  String get _badgeLabel {
-    switch (expense.status) {
-      case _ExpenseStatus.overdue:
-        return 'Overdue ⚠';
-      case _ExpenseStatus.unpaid:
-        return 'Unpaid';
-      case _ExpenseStatus.paid:
-        return 'Paid';
-      case _ExpenseStatus.deducted:
-        return 'Deducted';
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Icon circle + dashed line
-          SizedBox(
-            width: 36,
-            child: Column(
-              children: [
-                Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    color: expense.iconColor.withOpacity(0.12),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(expense.icon,
-                      color: expense.iconColor, size: 17),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(width: 12),
-
-          // Content
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Name + badge
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        expense.name,
-                        style: const TextStyle(
-                          color: kNavyDark,
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: _badgeColor.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                            color: _badgeColor.withOpacity(0.3)),
-                      ),
-                      child: Text(
-                        _badgeLabel,
-                        style: TextStyle(
-                          color: _badgeColor,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 3),
-
-                // Amount + saving note
-                Row(
-                  children: [
-                    Text(
-                      '₱${expense.amount.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                        color: kNavyDark,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    if (expense.savingNote != null) ...[
-                      const Text(' – ',
-                          style: TextStyle(
-                              color: Color(0xFF6B7A99), fontSize: 12)),
-                      Text(
-                        expense.savingNote!,
-                        style: const TextStyle(
-                          color: Color(0xFF6B7A99),
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-
-                const SizedBox(height: 2),
-
-                // Date
-                Row(
-                  children: [
-                    const Icon(Icons.access_time_rounded,
-                        size: 11, color: Color(0xFF6B7A99)),
-                    const SizedBox(width: 3),
-                    Text(
-                      expense.dateRange,
-                      style: const TextStyle(
-                          color: Color(0xFF6B7A99), fontSize: 11),
-                    ),
-                  ],
-                ),
-
-                const Divider(height: 16, color: Color(0xFFEEEEEE)),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -29,6 +29,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   late DraggableScrollableController _sheetController;
 
+  // Holds the ScrollController provided by DraggableScrollableSheet's builder.
+  // Updated every time the builder runs; used to reset scroll position to top
+  // before collapsing the sheet on tab-away so the drag handle stays visible.
+  ScrollController? _sheetScrollController;
+
   double _sheetSize = _snapPeek;
 
   @override
@@ -46,10 +51,28 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   // Collapse sheet when navigating away from Calendar tab (index 1).
+  // Resets the internal scroll position to top first so the drag handle is
+  // always visible after the sheet collapses.
   void _onTabChanged() {
     if (!mounted) return;
     if (widget.tabNotifier.value == 1) return; // staying on calendar — no-op
     if (!_sheetController.isAttached) return;
+
+    // Reset the task list scroll to top before collapsing.
+    // Guards: controller must have clients and position pixels must be above
+    // minScrollExtent to avoid jumpTo exceptions on already-topped lists.
+    final sc = _sheetScrollController;
+    if (sc != null && sc.hasClients) {
+      try {
+        final pos = sc.position;
+        if (pos.pixels > pos.minScrollExtent) {
+          sc.jumpTo(pos.minScrollExtent);
+        }
+      } catch (_) {
+        // Controller detached or position unavailable — safe to ignore.
+      }
+    }
+
     _sheetController.animateTo(
       _snapPeek,
       duration: const Duration(milliseconds: 300),
@@ -105,13 +128,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
           snap: true,
           snapSizes: const [_snapPeek, _snapHalf, _snapFull],
           builder: (context, scrollController) {
-            return Container(
+            // Cache the scroll controller so _onTabChanged can reset it.
+            // This controller is passed directly to TaskHomeSheet's
+            // CustomScrollView — only the list scrolls, not the entire sheet.
+            _sheetScrollController = scrollController;
+            return DecoratedBox(
               decoration: const BoxDecoration(
-                color: kWhite,
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(28),
-                  topRight: Radius.circular(28),
-                ),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black26,
@@ -120,10 +142,17 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   ),
                 ],
               ),
-              child: SingleChildScrollView(
-                controller: scrollController,
-                physics: const ClampingScrollPhysics(),
-                child: const TaskHomeSheet(),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(28),
+                  topRight: Radius.circular(28),
+                ),
+                child: ColoredBox(
+                  color: kWhite,
+                  child: TaskHomeSheet(
+                    scrollController: scrollController,
+                  ),
+                ),
               ),
             );
           },

@@ -65,7 +65,12 @@ class SpaceTask {
   String status;
   Color statusColor;
 
-  /// Names of assigned members. Empty list = unassigned.
+  /// Real display names of assigned members as stored in AuthStore.
+  /// Must never contain sentinel strings ('You', 'You (Creator)', 'Creator',
+  /// or any name suffixed with ' (Creator)').
+  /// The UI layer is responsible for translating the stored name to a
+  /// display label before presenting it (e.g. "You" for the current user),
+  /// but the model always stores and operates on the canonical display name.
   List<String> assignedTo;
 
   final List<SpaceAttachment> attachments;
@@ -77,7 +82,7 @@ class SpaceTask {
     required this.statusColor,
     List<String>? assignedTo,
     List<SpaceAttachment>? attachments,
-  })  : assignedTo  = assignedTo  ?? <String>[],
+  })  : assignedTo  = _sanitiseAssignees(assignedTo ?? <String>[]),
         attachments = attachments ?? <SpaceAttachment>[];
 
   static const List<String> _order = [
@@ -108,6 +113,36 @@ class SpaceTask {
     statusColor = colorFor(status);
   }
 
+  // ── Assignee helpers ───────────────────────────────────────
+
+  /// Strips sentinel strings and " (Creator)" suffixes from a list of
+  /// assignee names so that only canonical display names are stored.
+  ///
+  /// Sentinel strings like 'You', 'You (Creator)', and 'Creator' must never
+  /// be persisted to storage.  The picker UI may generate these labels for
+  /// display purposes, but the model layer must always sanitise before storing.
+  static List<String> _sanitiseAssignees(List<String> raw) {
+    const drop = <String>{'You', 'You (Creator)', 'Creator'};
+    final result = <String>[];
+    for (final name in raw) {
+      if (name.isEmpty) continue;
+      if (drop.contains(name)) continue;
+      if (name.endsWith(' (Creator)')) {
+        final cleaned = name
+            .substring(0, name.length - ' (Creator)'.length)
+            .trim();
+        if (cleaned.isNotEmpty) result.add(cleaned);
+        continue;
+      }
+      result.add(name);
+    }
+    // Deduplicate while preserving order.
+    final seen = <String>{};
+    return result.where(seen.add).toList();
+  }
+
+  // ── Serialisation ──────────────────────────────────────────
+
   Map<String, dynamic> toJson() => {
         'title':       title,
         'description': description,
@@ -119,12 +154,14 @@ class SpaceTask {
   factory SpaceTask.fromJson(Map<String, dynamic> j) {
     final status = (j['status'] as String?) ?? 'Not Started';
     return SpaceTask(
-      title:       (j['title'] as String?)       ?? '',
+      title:       (j['title']       as String?) ?? '',
       description: (j['description'] as String?) ?? '',
       status:      status,
       statusColor: colorFor(status),
-      assignedTo:  List<String>.from(
-          (j['assignedTo'] as List?)?.whereType<String>().toList() ?? []),
+      // Sanitise on load so legacy records with sentinel names are healed.
+      assignedTo: _sanitiseAssignees(
+          List<String>.from(
+              (j['assignedTo'] as List?)?.whereType<String>().toList() ?? [])),
       attachments: ((j['attachments'] as List?) ?? [])
           .whereType<Map>()
           .map((e) => SpaceAttachment.fromJson(Map<String, dynamic>.from(e)))
@@ -143,12 +180,14 @@ class Space {
   final String dueDate;
 
   /// All members except the creator.
+  /// Must contain only canonical display names — never sentinel strings.
   final List<String> members;
 
   /// True when the current user created this space.
   final bool isCreator;
 
-  /// Display name of whoever created the space.
+  /// Canonical display name of whoever created the space.
+  /// Must never be a sentinel string.
   final String creatorName;
 
   String status;
@@ -174,7 +213,25 @@ class Space {
     required this.completedTasks,
     required this.tasks,
     String? inviteCode,
-  }) : inviteCode = inviteCode ?? _generateCode();
+  })  : assert(
+          creatorName.isNotEmpty,
+          'Space.creatorName must not be empty. '
+          'Pass AuthStore.instance.displayName when constructing a Space.',
+        ),
+        assert(
+          !_isSentinel(creatorName),
+          'Space.creatorName must be a real display name, not a sentinel '
+          'string ("$creatorName").',
+        ),
+        inviteCode = inviteCode ?? _generateCode();
+
+  // ── Sentinel guard ─────────────────────────────────────────
+  static bool _isSentinel(String name) {
+    const sentinels = <String>{'You', 'You (Creator)', 'Creator'};
+    if (sentinels.contains(name)) return true;
+    if (name.endsWith(' (Creator)')) return true;
+    return false;
+  }
 
   static String _generateCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -191,28 +248,48 @@ class Space {
 
   // ── Member helpers ─────────────────────────────────────────
 
-  /// True if [displayName] is the creator OR appears in the members list.
-  /// Also accepts the sentinel strings used in the assignment picker UI.
-  bool containsMember(String displayName) {
-    if (displayName == creatorName) return true;
-    if (displayName == 'You' || displayName == 'You (Creator)') return true;
-    // Strip the " (Creator)" suffix that the picker sometimes appends.
-    final cleaned = displayName.endsWith(' (Creator)')
-        ? displayName.substring(0, displayName.length - ' (Creator)'.length)
-        : displayName;
-    return members.contains(cleaned) || cleaned == creatorName;
+  /// Returns the canonical (stored) display name for the current user
+  /// within this space context.
+  ///
+  /// If [currentUserDisplayName] matches the creator name, returns
+  /// [creatorName]; otherwise returns the name as-is.
+  /// Never returns a sentinel string.
+  String canonicalNameFor(String currentUserDisplayName) {
+    if (currentUserDisplayName.isEmpty) return creatorName;
+    // Strip any " (Creator)" suffix the picker may have appended.
+    final cleaned = _stripCreatorSuffix(currentUserDisplayName);
+    return cleaned;
   }
 
-  /// Remove stale assignee names that are no longer members of the space.
-  /// Call after removing a member or syncing from shared patches.
+  /// True if [displayName] is the creator OR appears in the members list.
+  /// Sentinel strings are resolved correctly without storing them.
+  bool containsMember(String displayName) {
+    if (displayName.isEmpty) return false;
+    final cleaned = _stripCreatorSuffix(displayName);
+    if (cleaned == creatorName) return true;
+    return members.contains(cleaned);
+  }
+
+  /// Strips the " (Creator)" suffix that the picker UI may append.
+  static String _stripCreatorSuffix(String name) {
+    if (name.endsWith(' (Creator)')) {
+      return name.substring(0, name.length - ' (Creator)'.length).trim();
+    }
+    return name;
+  }
+
+  /// Removes assignee names from all tasks that are no longer members of
+  /// this space.  Call after removing a member or syncing from shared patches.
+  ///
+  /// Sentinel strings are also pruned — they must never persist in storage.
   void pruneStaleAssignees() {
     final valid = <String>{creatorName, ...members};
     for (final task in tasks) {
       task.assignedTo.removeWhere((name) {
-        if (name == 'You' || name == 'You (Creator)') return false;
-        final cleaned = name.endsWith(' (Creator)')
-            ? name.substring(0, name.length - ' (Creator)'.length)
-            : name;
+        if (name.isEmpty) return true;
+        // Always remove sentinel strings, regardless of membership.
+        if (_isSentinel(name)) return true;
+        final cleaned = _stripCreatorSuffix(name);
         return !valid.contains(cleaned);
       });
     }
@@ -271,24 +348,65 @@ class Space {
       };
 
   /// Ensures exactly one space on each side of the dash in a date-range string.
-  /// Heals legacy values stored without surrounding spaces (e.g.
-  /// "04/19/26-05/20/26" → "04/19/26 - 05/20/26").
   static String _normaliseDateRange(String raw) {
     if (raw.isEmpty) return raw;
     return raw.replaceAll(RegExp(r'\s*-\s*'), ' - ');
   }
 
+  /// Sanitises a stored creator name: strips " (Creator)" suffix and falls
+  /// back to an empty string on failure rather than storing a sentinel.
+  static String _sanitiseCreatorName(String? raw) {
+    if (raw == null || raw.isEmpty) return '';
+    if (raw == 'Creator' || raw == 'You' || raw == 'You (Creator)') return '';
+    if (raw.endsWith(' (Creator)')) {
+      return raw.substring(0, raw.length - ' (Creator)'.length).trim();
+    }
+    return raw;
+  }
+
+  /// Sanitises the members list: strips sentinel strings and " (Creator)"
+  /// suffixes so that only canonical display names are stored.
+  static List<String> _sanitiseMembers(List<dynamic>? raw) {
+    const drop = <String>{'You', 'You (Creator)', 'Creator'};
+    final result = <String>[];
+    for (final item in raw?.whereType<String>() ?? <String>[]) {
+      if (item.isEmpty) continue;
+      if (drop.contains(item)) continue;
+      if (item.endsWith(' (Creator)')) {
+        final cleaned = item
+            .substring(0, item.length - ' (Creator)'.length)
+            .trim();
+        if (cleaned.isNotEmpty) result.add(cleaned);
+        continue;
+      }
+      result.add(item);
+    }
+    // Deduplicate.
+    final seen = <String>{};
+    return result.where(seen.add).toList();
+  }
+
   factory Space.fromJson(Map<String, dynamic> j) {
-    final status = (j['status'] as String?) ?? 'Not Started';
+    final status      = (j['status'] as String?) ?? 'Not Started';
+    final creatorName = _sanitiseCreatorName(j['creatorName'] as String?);
+
+    // Heal legacy records: remove any member entry that duplicates the
+    // creator name (including sentinel variants) to avoid double-counting.
+    final rawMembers  = _sanitiseMembers(j['members'] as List?);
+    final members     = creatorName.isEmpty
+        ? rawMembers
+        : rawMembers.where((m) => m != creatorName).toList();
+
     return Space(
       name:           (j['name']        as String?) ?? '',
       description:    (j['description'] as String?) ?? '',
       dateRange:      _normaliseDateRange((j['dateRange'] as String?) ?? ''),
       dueDate:        (j['dueDate']     as String?) ?? '',
-      members:        List<String>.from(
-          (j['members'] as List?)?.whereType<String>().toList() ?? []),
+      members:        members,
       isCreator:      (j['isCreator']   as bool?)   ?? false,
-      creatorName:    (j['creatorName'] as String?) ?? 'Creator',
+      // Fall back to a non-empty placeholder only in release builds; in debug
+      // the Space constructor assert will fire to surface the root cause.
+      creatorName:    creatorName.isNotEmpty ? creatorName : 'Unknown',
       status:         status,
       statusColor:    SpaceTask.colorFor(status),
       accentColor:    Color((j['accentColor'] as int?) ?? 0xFF9B88E8),

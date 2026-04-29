@@ -24,6 +24,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   late DraggableScrollableController _sheetController;
 
+  // Holds the ScrollController provided by DraggableScrollableSheet's builder.
+  // Updated every time the builder runs; used to reset scroll position to top
+  // before collapsing the sheet on tab-away so the drag handle stays visible.
+  ScrollController? _sheetScrollController;
+
   @override
   void initState() {
     super.initState();
@@ -44,12 +49,28 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // Collapse sheet when navigating away from this tab (index 0).
-  // Guard: controller must be attached (sheet may not have built yet on
-  // very first frame) and widget must still be mounted.
+  // Resets the internal scroll position to top first so the drag handle is
+  // always visible after the sheet collapses.
   void _onTabChanged() {
     if (!mounted) return;
     if (widget.tabNotifier.value == 0) return; // staying on home tab — no-op
     if (!_sheetController.isAttached) return;
+
+    // Reset the notification list scroll to top before collapsing.
+    // Guards: controller must have clients and position pixels must be above
+    // minScrollExtent to avoid jumpTo exceptions on already-topped lists.
+    final sc = _sheetScrollController;
+    if (sc != null && sc.hasClients) {
+      try {
+        final pos = sc.position;
+        if (pos.pixels > pos.minScrollExtent) {
+          sc.jumpTo(pos.minScrollExtent);
+        }
+      } catch (_) {
+        // Controller detached or position unavailable — safe to ignore.
+      }
+    }
+
     _sheetController.animateTo(
       _snapPeek,
       duration: const Duration(milliseconds: 300),
@@ -67,14 +88,21 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-listenable: Listenable.merge([
-  TaskStore.instance,
-  SpaceStore.instance,
-]),      builder: (context, _) {
-        final store = TaskStore.instance;
-        final pct   = store.completionPercent;
-        final total = store.total;
+      listenable: Listenable.merge([
+        TaskStore.instance,
+        SpaceStore.instance,
+      ]),
+      builder: (context, _) {
+        final store  = TaskStore.instance;
+        final pct    = store.completionPercent;
+        final total  = store.total;
         final spaces = SpaceStore.instance.spaces;
+
+        // username is the canonical public identity — never fall back to displayName.
+        final _username = AuthStore.instance.username;
+        final greeting = _username.isNotEmpty
+            ? 'Welcome back, $_username!'
+            : 'Welcome back!';
 
         return Stack(
           children: [
@@ -91,15 +119,16 @@ listenable: Listenable.merge([
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-'Welcome back, ${AuthStore.instance.displayName}!',                            style: TextStyle(
+                            greeting,
+                            style: const TextStyle(
                               color: kWhite,
                               fontSize: 26,
                               fontWeight: FontWeight.bold,
                               letterSpacing: 0.2,
                             ),
                           ),
-                          SizedBox(height: 6),
-                          Text(
+                          const SizedBox(height: 6),
+                          const Text(
                             "Here's your overview for today",
                             style: TextStyle(color: kSubtitle, fontSize: 14),
                           ),
@@ -140,14 +169,14 @@ listenable: Listenable.merge([
                           Row(
                             children: [
                               _HomeStatCard(
-  icon: Icons.group_rounded,
-  iconColor: const Color(0xFF7070D8),
-  title: 'Spaces',
-  value: '${spaces.length}',
-  subtitle: spaces.isEmpty
-      ? 'No spaces yet'
-      : '${spaces.where((s) => !s.isCompleted).length} active now',
-),
+                                icon: Icons.group_rounded,
+                                iconColor: const Color(0xFF7070D8),
+                                title: 'Spaces',
+                                value: '${spaces.length}',
+                                subtitle: spaces.isEmpty
+                                    ? 'No spaces yet'
+                                    : '${spaces.where((s) => !s.isCompleted).length} active now',
+                              ),
                               const SizedBox(width: 10),
                               const _HomeStatCard(
                                 icon: Icons.trending_up_rounded,
@@ -175,13 +204,12 @@ listenable: Listenable.merge([
               snap: true,
               snapSizes: const [_snapPeek, _snapHalf, _snapFull],
               builder: (context, scrollController) {
-                return Container(
+                // Cache the scroll controller so _onTabChanged can reset it.
+                // This controller is now passed directly to the notification
+                // ListView — only the list scrolls, not the entire sheet.
+                _sheetScrollController = scrollController;
+                return DecoratedBox(
                   decoration: const BoxDecoration(
-                    color: kWhite,
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(28),
-                      topRight: Radius.circular(28),
-                    ),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black26,
@@ -190,12 +218,18 @@ listenable: Listenable.merge([
                       ),
                     ],
                   ),
-                  child: SingleChildScrollView(
-                    controller: scrollController,
-                    physics: const ClampingScrollPhysics(),
-                    child: _NotificationSheet(
-                      notifications: store.notifications,
-                      onClearAll: () => TaskStore.instance.clearNotifications(),
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(28),
+                      topRight: Radius.circular(28),
+                    ),
+                    child: ColoredBox(
+                      color: kWhite,
+                      child: _NotificationSheet(
+                        notifications: store.notifications,
+                        onClearAll: () => TaskStore.instance.clearNotifications(),
+                        scrollController: scrollController,
+                      ),
                     ),
                   ),
                 );
@@ -284,10 +318,14 @@ enum _SortBy { newest, oldest, type }
 class _NotificationSheet extends StatefulWidget {
   final List<AppNotification> notifications;
   final VoidCallback onClearAll;
+  // The DraggableScrollableSheet's scroll controller — drives only the
+  // notification list so the drag handle and header remain fixed.
+  final ScrollController scrollController;
 
   const _NotificationSheet({
     required this.notifications,
     required this.onClearAll,
+    required this.scrollController,
   });
 
   @override
@@ -380,170 +418,109 @@ class _NotificationSheetState extends State<_NotificationSheet> {
     final sorted = _sorted;
     final unread = _unreadCount;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Drag handle
-        Center(
-          child: Container(
-            width: 40,
-            height: 4,
-            margin: const EdgeInsets.only(top: 12, bottom: 20),
-            decoration: BoxDecoration(
-              color: Colors.grey.withOpacity(0.35),
-              borderRadius: BorderRadius.circular(2),
+    // ── Architecture: CustomScrollView at the root ────────────────────────
+    // The DraggableScrollableSheet requires its scrollController to be
+    // attached to a scrollable that is the direct child of its builder.
+    // Using CustomScrollView satisfies this: dragging anywhere on the sheet
+    // — header or list — travels through a single scroll controller so the
+    // sheet drag, header interaction, and list scroll all work correctly.
+    //
+    // The header is a SliverPersistentHeader with pinned: true so it stays
+    // visible at the top of the sheet regardless of list scroll position.
+    // The notification items live in a SliverList (or SliverFillRemaining
+    // for the empty state).
+    return CustomScrollView(
+      controller: widget.scrollController,
+      physics: const ClampingScrollPhysics(),
+      slivers: [
+        // ── Pinned header sliver ─────────────────────────────────────────
+        // Drag handle + title row + sort/clear controls + mark-all-read.
+        // pinned: true keeps it visible; floating: false avoids re-appear
+        // on scroll-up which would feel wrong for a notification panel.
+        // SliverAppBar with pinned:true keeps the header visible while the
+        // list scrolls. toolbarHeight matches the content: base height plus
+        // the mark-all-read row when it is present.
+        SliverAppBar(
+          pinned: true,
+          automaticallyImplyLeading: false,
+          backgroundColor: kWhite,
+          surfaceTintColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          elevation: 0,
+          toolbarHeight: (unread > 0 && notifications.isNotEmpty) ? 116.0 : 84.0,
+          flexibleSpace: FlexibleSpaceBar(
+            collapseMode: CollapseMode.none,
+            background: _NotificationSheetHeader(
+              notifications: notifications,
+              unread: unread,
+              sortLabel: _sortLabel,
+              onShowSort: _showSortSheet,
+              onClearAll: _confirmClearAll,
+              onMarkAllRead: () =>
+                  TaskStore.instance.markAllNotificationsRead(),
             ),
           ),
         ),
 
-        // Header row
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Row(
-            children: [
-              // Title + unread badge
-              Row(
-                children: [
-                  const Text(
-                    'Notifications',
-                    style: TextStyle(
-                      color: kNavyDark,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
+        // ── Content sliver ───────────────────────────────────────────────
+        if (notifications.isEmpty)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 20),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.notifications_none_rounded,
+                      size: 72,
+                      color: kNavyDark.withOpacity(0.12),
                     ),
-                  ),
-                  if (unread > 0) ...[
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 7, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE87070),
-                        borderRadius: BorderRadius.circular(20),
+                    const SizedBox(height: 14),
+                    Text(
+                      'No notifications yet',
+                      style: TextStyle(
+                        color: kNavyDark.withOpacity(0.4),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
                       ),
-                      child: Text(
-                        '$unread',
-                        style: const TextStyle(
-                          color: kWhite,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                        ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      "Create a task to get started!",
+                      style: TextStyle(
+                        color: kNavyDark.withOpacity(0.28),
+                        fontSize: 13,
                       ),
                     ),
                   ],
-                ],
+                ),
               ),
-              const Spacer(),
-              if (notifications.isNotEmpty) ...[
-                // Sort button
-                GestureDetector(
-                  onTap: _showSortSheet,
-                  child: Row(
-                    children: [
-                      Text(
-                        'Sorted by: $_sortLabel',
-                        style: const TextStyle(
-                          color: Color(0xFF6B7A99),
-                          fontSize: 13,
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 80),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, i) {
+                  // Footer item
+                  if (i == sorted.length) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Center(
+                        child: Text(
+                          'No More Notifications',
+                          style: TextStyle(
+                            color: kNavyDark.withOpacity(0.28),
+                            fontSize: 13,
+                          ),
                         ),
                       ),
-                      const SizedBox(width: 3),
-                      const Icon(Icons.arrow_drop_down,
-                          color: Color(0xFF6B7A99), size: 20),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                // Clear all button
-                GestureDetector(
-                  onTap: _confirmClearAll,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 9, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFECEC),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text(
-                      'Clear',
-                      style: TextStyle(
-                        color: Color(0xFFE87070),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-
-        // "Mark all read" sub-row — only shown when there are unread items
-        if (unread > 0 && notifications.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
-            child: GestureDetector(
-              onTap: () => TaskStore.instance.markAllNotificationsRead(),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.done_all_rounded,
-                      size: 15, color: Color(0xFF9B88E8)),
-                  const SizedBox(width: 5),
-                  Text(
-                    'Mark all as read',
-                    style: const TextStyle(
-                      color: Color(0xFF9B88E8),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-        const SizedBox(height: 20),
-
-        if (notifications.isEmpty) ...[
-          const SizedBox(height: 20),
-          Center(
-            child: Column(
-              children: [
-                Icon(
-                  Icons.notifications_none_rounded,
-                  size: 72,
-                  color: kNavyDark.withOpacity(0.12),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  'No notifications yet',
-                  style: TextStyle(
-                    color: kNavyDark.withOpacity(0.4),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  "Create a task to get started!",
-                  style: TextStyle(
-                    color: kNavyDark.withOpacity(0.28),
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ] else ...[
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Column(
-              children: [
-                for (int i = 0; i < sorted.length; i++)
-                  // Swipe left to dismiss individual notification
-                  Dismissible(
+                    );
+                  }
+                  return Dismissible(
                     key: ValueKey(sorted[i].id),
                     direction: DismissDirection.endToStart,
                     onDismissed: (_) =>
@@ -569,29 +546,169 @@ class _NotificationSheetState extends State<_NotificationSheet> {
                       showDashedLine: i < sorted.length - 1,
                       priority: sorted[i].priority,
                       isRead: sorted[i].isRead,
-                      onTap: () => NotificationRouter.instance
-                          .route(context, sorted[i]),
+                      onTap: () =>
+                          NotificationRouter.instance.route(context, sorted[i]),
                     ),
-                  ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Center(
-              child: Text(
-                'No More Notifications',
-                style: TextStyle(
-                  color: kNavyDark.withOpacity(0.28),
-                  fontSize: 13,
-                ),
+                  );
+                },
+                childCount: sorted.length + 1, // +1 for footer
               ),
             ),
           ),
-        ],
-
-        const SizedBox(height: 80),
       ],
+    );
+  }
+}
+
+// ── Pinned header widget ──────────────────────────────────────────────────────
+// Plain StatelessWidget rendered inside a SliverAppBar's flexibleSpace.
+// Using SliverAppBar(pinned:true) instead of SliverPersistentHeaderDelegate
+// avoids the layoutExtent/paintExtent mismatch crash that occurs when the
+// delegate's reported extent doesn't exactly match its painted content height.
+class _NotificationSheetHeader extends StatelessWidget {
+  final List<AppNotification> notifications;
+  final int unread;
+  final String sortLabel;
+  final VoidCallback onShowSort;
+  final VoidCallback onClearAll;
+  final VoidCallback onMarkAllRead;
+
+  const _NotificationSheetHeader({
+    required this.notifications,
+    required this.unread,
+    required this.sortLabel,
+    required this.onShowSort,
+    required this.onClearAll,
+    required this.onMarkAllRead,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: kWhite,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(top: 12, bottom: 16),
+              decoration: BoxDecoration(
+                color: Colors.grey.withOpacity(0.35),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+
+          // Title + controls row
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'Notifications',
+                      style: TextStyle(
+                        color: kNavyDark,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    if (unread > 0) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE87070),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '$unread',
+                          style: const TextStyle(
+                            color: kWhite,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const Spacer(),
+                if (notifications.isNotEmpty) ...[
+                  GestureDetector(
+                    onTap: onShowSort,
+                    child: Row(
+                      children: [
+                        Text(
+                          'Sorted by: $sortLabel',
+                          style: const TextStyle(
+                            color: Color(0xFF6B7A99),
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        const Icon(Icons.arrow_drop_down,
+                            color: Color(0xFF6B7A99), size: 20),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  GestureDetector(
+                    onTap: onClearAll,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 9, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFECEC),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text(
+                        'Clear',
+                        style: TextStyle(
+                          color: Color(0xFFE87070),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          // Mark all read — only when there are unread items
+          if (unread > 0 && notifications.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              child: GestureDetector(
+                onTap: onMarkAllRead,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    Icon(Icons.done_all_rounded,
+                        size: 15, color: Color(0xFF9B88E8)),
+                    SizedBox(width: 5),
+                    Text(
+                      'Mark all as read',
+                      style: TextStyle(
+                        color: Color(0xFF9B88E8),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
