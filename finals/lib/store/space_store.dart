@@ -30,14 +30,17 @@ class SpaceStore extends ChangeNotifier {
       final raw = prefs.getString(_kSpaces);
       if (raw != null) {
         final list = jsonDecode(raw) as List;
-        _spaces.addAll(
-          list.map((e) =>
-              Space.fromJson(Map<String, dynamic>.from(e as Map))),
-        );
+        for (final e in list) {
+          try {
+            _spaces.add(Space.fromJson(Map<String, dynamic>.from(e as Map)));
+          } catch (_) {
+            // Corrupt single entry — skip it, keep the rest.
+          }
+        }
         notifyListeners();
       }
     } catch (_) {
-      // Corrupt data — wipe and start clean so the app doesn't crash.
+      // Corrupt top-level data — wipe and start clean so the app doesn't crash.
       _spaces.clear();
       await prefs.remove(_kSpaces);
     }
@@ -61,29 +64,46 @@ class SpaceStore extends ChangeNotifier {
   Future<void> _registerGlobally(Space space) async {
     if (!space.isCreator) return;
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(kSpaceGlobalRegistry);
-    final Map<String, dynamic> registry =
-        raw != null ? Map<String, dynamic>.from(jsonDecode(raw) as Map) : {};
-    registry[space.inviteCode] = space.toJson();
-    await prefs.setString(kSpaceGlobalRegistry, jsonEncode(registry));
+    try {
+      final raw = prefs.getString(kSpaceGlobalRegistry);
+      final Map<String, dynamic> registry =
+          raw != null ? Map<String, dynamic>.from(jsonDecode(raw) as Map) : {};
+      registry[space.inviteCode] = space.toJson();
+      await prefs.setString(kSpaceGlobalRegistry, jsonEncode(registry));
+    } catch (_) {
+      // Corrupt registry — overwrite with just this space rather than crash.
+      try {
+        await prefs.setString(
+            kSpaceGlobalRegistry,
+            jsonEncode({space.inviteCode: space.toJson()}));
+      } catch (_) {}
+    }
   }
 
   Future<void> _unregisterGlobally(String inviteCode) async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(kSpaceGlobalRegistry);
-    if (raw == null) return;
-    final Map<String, dynamic> registry =
-        Map<String, dynamic>.from(jsonDecode(raw) as Map);
-    registry.remove(inviteCode);
-    // Also clean up any shared patches for this space.
-    final patchRaw = prefs.getString(kSpaceSharedPatches);
-    if (patchRaw != null) {
-      final patches =
-          Map<String, dynamic>.from(jsonDecode(patchRaw) as Map);
-      patches.remove(inviteCode);
-      await prefs.setString(kSpaceSharedPatches, jsonEncode(patches));
+    try {
+      final raw = prefs.getString(kSpaceGlobalRegistry);
+      if (raw == null) return;
+      final Map<String, dynamic> registry =
+          Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      registry.remove(inviteCode);
+      // Also clean up any shared patches for this space.
+      try {
+        final patchRaw = prefs.getString(kSpaceSharedPatches);
+        if (patchRaw != null) {
+          final patches =
+              Map<String, dynamic>.from(jsonDecode(patchRaw) as Map);
+          patches.remove(inviteCode);
+          await prefs.setString(kSpaceSharedPatches, jsonEncode(patches));
+        }
+      } catch (_) {
+        // Corrupt patches — leave as-is; they'll be ignored on next sync.
+      }
+      await prefs.setString(kSpaceGlobalRegistry, jsonEncode(registry));
+    } catch (_) {
+      // Corrupt registry — nothing to unregister from.
     }
-    await prefs.setString(kSpaceGlobalRegistry, jsonEncode(registry));
   }
 
   /// Look up a space by invite code from the global registry.
@@ -111,11 +131,20 @@ class SpaceStore extends ChangeNotifier {
 
   Future<void> _writeSharedPatch(Space space) async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(kSpaceSharedPatches);
-    final Map<String, dynamic> patches =
-        raw != null ? Map<String, dynamic>.from(jsonDecode(raw) as Map) : {};
-    patches[space.inviteCode] = space.toJson();
-    await prefs.setString(kSpaceSharedPatches, jsonEncode(patches));
+    try {
+      final raw = prefs.getString(kSpaceSharedPatches);
+      final Map<String, dynamic> patches =
+          raw != null ? Map<String, dynamic>.from(jsonDecode(raw) as Map) : {};
+      patches[space.inviteCode] = space.toJson();
+      await prefs.setString(kSpaceSharedPatches, jsonEncode(patches));
+    } catch (_) {
+      // Corrupt patches blob — overwrite with just this space's patch.
+      try {
+        await prefs.setString(
+            kSpaceSharedPatches,
+            jsonEncode({space.inviteCode: space.toJson()}));
+      } catch (_) {}
+    }
   }
 
   Future<void> patchMembersInRegistry(
@@ -227,9 +256,13 @@ class SpaceStore extends ChangeNotifier {
     if (recipientUserId.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     final key = kInboxSpaceInvites(recipientUserId);
-    final raw = prefs.getString(key);
-    final List<dynamic> list =
-        raw != null ? (jsonDecode(raw) as List) : [];
+    List<dynamic> list;
+    try {
+      final raw = prefs.getString(key);
+      list = raw != null ? (jsonDecode(raw) as List) : [];
+    } catch (_) {
+      list = []; // corrupt inbox — start fresh rather than drop the invite
+    }
     if (!list.any((e) => (e as Map)['inviteCode'] == space.inviteCode)) {
       list.add(space.toJson());
       await prefs.setString(key, jsonEncode(list));
@@ -320,6 +353,7 @@ class SpaceStore extends ChangeNotifier {
   /// Write [space.inviteCode] into each member's deletion inbox so they
   /// remove the space from their list the next time the screen focuses.
   Future<void> _pushDeletionNoticesToMembers(Space space) async {
+    final myId = AuthStore.instance.userId;
     for (final memberName in space.members) {
       final cleaned = memberName
           .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
@@ -327,6 +361,8 @@ class SpaceStore extends ChangeNotifier {
       if (cleaned.isEmpty) continue;
       final memberId = AuthStore.instance.userIdForName(cleaned);
       if (memberId == null || memberId.isEmpty) continue;
+      // Never send a deletion notice to the creator themselves.
+      if (memberId == myId) continue;
       await _pushDeletionNotice(space.inviteCode, memberId);
     }
   }
@@ -337,9 +373,13 @@ class SpaceStore extends ChangeNotifier {
     if (recipientUserId.isEmpty || inviteCode.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     final key = kInboxSpaceDeletion(recipientUserId);
-    final raw = prefs.getString(key);
-    final List<dynamic> list =
-        raw != null ? (jsonDecode(raw) as List) : [];
+    List<dynamic> list;
+    try {
+      final raw = prefs.getString(key);
+      list = raw != null ? (jsonDecode(raw) as List) : [];
+    } catch (_) {
+      list = []; // corrupt inbox — start fresh
+    }
     if (!list.contains(inviteCode)) {
       list.add(inviteCode);
       await prefs.setString(key, jsonEncode(list));
@@ -363,7 +403,8 @@ class SpaceStore extends ChangeNotifier {
     try {
       final List<dynamic> codes = jsonDecode(raw) as List;
       for (final entry in codes) {
-        final code = entry as String?;
+        // Tolerate non-String entries from corrupt / future-version data.
+        final code = entry is String ? entry : null;
         if (code == null || code.isEmpty) continue;
         // Remove every matching space from the in-memory list.
         final before = _spaces.length;

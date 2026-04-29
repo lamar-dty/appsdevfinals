@@ -155,7 +155,11 @@ class NotificationRouter extends ChangeNotifier {
   // ── Space routing ─────────────────────────────────────────
 
   void _routeSpace(BuildContext context, AppNotification n) {
-    final inviteCode = n.spaceInviteCode!;
+    final inviteCode = n.spaceInviteCode;
+    if (inviteCode == null || inviteCode.isEmpty) {
+      _showFallbackSnackBar(context, 'Could not open notification.');
+      return;
+    }
     final spaces     = SpaceStore.instance.spaces;
     final space      = spaces.where((s) => s.inviteCode == inviteCode).firstOrNull;
 
@@ -199,21 +203,31 @@ class NotificationRouter extends ChangeNotifier {
     _onSwitchTab?.call(index);
   }
 
-  void _openSpaceSafe(BuildContext context, String inviteCode) {
+  // Maximum number of deferred frames to wait for SpacesScreen to mount
+  // before giving up. Prevents unbounded addPostFrameCallback chains when
+  // the screen never registers its callbacks (e.g. unmounted before retrying).
+  static const int _kMaxOpenRetries = 5;
+
+  void _openSpaceSafe(BuildContext context, String inviteCode,
+      [int retries = 0]) {
     if (_onOpenSpace == null) {
-      // SpacesScreen not yet mounted — queue again for next frame.
+      if (retries >= _kMaxOpenRetries || !context.mounted) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (context.mounted) _openSpaceSafe(context, inviteCode);
+        if (context.mounted) _openSpaceSafe(context, inviteCode, retries + 1);
       });
       return;
     }
     _onOpenSpace!.call(inviteCode);
   }
 
-  void _openSpaceChatSafe(BuildContext context, String inviteCode) {
+  void _openSpaceChatSafe(BuildContext context, String inviteCode,
+      [int retries = 0]) {
     if (_onOpenSpaceChat == null) {
+      if (retries >= _kMaxOpenRetries || !context.mounted) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (context.mounted) _openSpaceChatSafe(context, inviteCode);
+        if (context.mounted) {
+          _openSpaceChatSafe(context, inviteCode, retries + 1);
+        }
       });
       return;
     }
@@ -221,10 +235,14 @@ class NotificationRouter extends ChangeNotifier {
   }
 
   void _openSpaceTaskSafe(
-      BuildContext context, String inviteCode, String taskTitle) {
+      BuildContext context, String inviteCode, String taskTitle,
+      [int retries = 0]) {
     if (_onOpenSpaceTask == null) {
+      if (retries >= _kMaxOpenRetries || !context.mounted) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (context.mounted) _openSpaceTaskSafe(context, inviteCode, taskTitle);
+        if (context.mounted) {
+          _openSpaceTaskSafe(context, inviteCode, taskTitle, retries + 1);
+        }
       });
       return;
     }

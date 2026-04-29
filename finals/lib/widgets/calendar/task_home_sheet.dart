@@ -839,12 +839,11 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => showCreateTaskSheet(context),
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 40),
-        child: Center(
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Center(
+        child: GestureDetector(
+          onTap: () => showCreateTaskSheet(context),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [

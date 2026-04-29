@@ -96,17 +96,22 @@ class TaskStore extends ChangeNotifier {
       final list = jsonDecode(raw) as List;
       bool changed = false;
       for (final e in list) {
-        final notif =
-            AppNotification.fromJson(Map<String, dynamic>.from(e as Map));
-        final hadIt = _notifications.any((n) => n.id == notif.id);
-        _notifications.removeWhere((n) => n.id == notif.id);
+        AppNotification notif;
+        try {
+          notif =
+              AppNotification.fromJson(Map<String, dynamic>.from(e as Map));
+        } catch (_) {
+          continue; // corrupt entry — skip rather than crash
+        }
+        // Only insert if not already present; never clobber existing read state.
+        if (_notifications.any((n) => n.id == notif.id)) continue;
         _notifications.insert(0, notif);
-        if (!hadIt) changed = true;
+        changed = true;
       }
       await prefs.remove(key);
       if (changed) await _saveNotifications();
     } catch (_) {
-      await prefs.remove(key); // corrupt — clear it
+      await prefs.remove(key); // corrupt inbox — clear it
     }
   }
 
@@ -124,9 +129,14 @@ class TaskStore extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final key = kInboxNotifications(recipientUserId);
     final raw = prefs.getString(key);
-    final List<dynamic> list =
-        raw != null ? (jsonDecode(raw) as List) : [];
-    if (!list.any((e) => (e as Map)['id'] == notif.id)) {
+    List<dynamic> list;
+    try {
+      list = raw != null ? (jsonDecode(raw) as List) : [];
+    } catch (_) {
+      // Corrupt inbox — start fresh so this notification is not silently lost.
+      list = [];
+    }
+    if (!list.any((e) => (e as Map?)?['id'] == notif.id)) {
       list.add(notif.toJson());
       await prefs.setString(key, jsonEncode(list));
     }
@@ -362,7 +372,12 @@ class TaskStore extends ChangeNotifier {
   /// Notify the space creator that a new member joined.
   Future<void> notifyMemberJoined(
       Space space, String joinerName, String creatorName) async {
-    final creatorId = AuthStore.instance.userIdForName(creatorName);
+    // Strip any display suffix before looking up the creator's user ID.
+    final cleanedCreator = creatorName
+        .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
+        .trim();
+    if (cleanedCreator.isEmpty) return;
+    final creatorId = AuthStore.instance.userIdForName(cleanedCreator);
     // Defensive: skip if creator not found or is the acting user.
     if (creatorId == null || creatorId == AuthStore.instance.userId) return;
     final notif = AppNotification(
@@ -411,16 +426,29 @@ class TaskStore extends ChangeNotifier {
       subtitle: '$leavingName left the space',
       detail: '$leavingName has left "${space.name}".',
     );
+
+    // Collect unique recipient IDs to prevent double-push when the creator
+    // name also appears as an entry in the members list.
+    final Set<String> pushed = {};
+
     // Push to creator.
-    final creatorId = AuthStore.instance.userIdForName(space.creatorName);
+    final cleanedCreator = space.creatorName
+        .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
+        .trim();
+    final creatorId = cleanedCreator.isNotEmpty
+        ? AuthStore.instance.userIdForName(cleanedCreator)
+        : null;
     if (creatorId != null && creatorId != myId) {
+      pushed.add(creatorId);
       await _pushToUser(creatorId, notif);
     }
-    // Push to every other member, guarding against null / self.
+
+    // Push to every other member, guarding against null / self / already-pushed.
     for (final member in space.members) {
       if (member == leavingName) continue;
       final uid = AuthStore.instance.userIdForName(member);
-      if (uid == null || uid == myId || uid == creatorId) continue;
+      if (uid == null || uid == myId || pushed.contains(uid)) continue;
+      pushed.add(uid);
       await _pushToUser(uid, notif);
     }
   }
@@ -486,12 +514,24 @@ class TaskStore extends ChangeNotifier {
     final id =
         '${_chatNotifId(space.inviteCode)}_${DateTime.now().millisecondsSinceEpoch}';
     final notif = _buildChatMessage(space, senderName, preview, id);
-    final myId  = AuthStore.instance.userId;
+    final myId            = AuthStore.instance.userId;
+    final myDisplayName   = AuthStore.instance.displayName;
+
+    // Sentinels that may appear as the sender when the current user sends.
+    const selfSentinels = {'You', 'You (Creator)'};
+
+    // Track pushed IDs to prevent double-delivery.
+    final Set<String> pushed = {};
 
     for (final member in space.members) {
+      // Skip the sender by display name and known sentinels.
       if (member == senderName) continue;
+      if (member == myDisplayName && selfSentinels.contains(senderName)) {
+        continue;
+      }
       final uid = AuthStore.instance.userIdForName(member);
-      if (uid == null) continue; // member not registered on this device — skip
+      if (uid == null || pushed.contains(uid)) continue;
+      pushed.add(uid);
       if (uid == myId) {
         _addSpaceNotif(notif);
       } else {
@@ -500,10 +540,24 @@ class TaskStore extends ChangeNotifier {
     }
 
     // Also deliver to creator if not already covered.
-    final creatorId = AuthStore.instance.userIdForName(space.creatorName);
+    // Strip suffix before checking membership so "Alice (Creator)" vs "Alice"
+    // doesn't cause a missed-dedup.
+    final cleanedCreator = space.creatorName
+        .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
+        .trim();
+    final creatorId = cleanedCreator.isNotEmpty
+        ? AuthStore.instance.userIdForName(cleanedCreator)
+        : null;
+    final creatorAlreadyCovered = space.members.any((m) {
+      final cleaned =
+          m.replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '').trim();
+      return cleaned == cleanedCreator;
+    });
     if (creatorId != null &&
         creatorId != myId &&
-        !space.members.contains(space.creatorName)) {
+        !creatorAlreadyCovered &&
+        !pushed.contains(creatorId)) {
+      pushed.add(creatorId);
       await _pushToUser(creatorId, notif);
     }
   }
@@ -530,6 +584,7 @@ class TaskStore extends ChangeNotifier {
       Space space, SpaceTask task, String currentUserDisplayName) async {
     final notif  = _buildSpaceTaskAssigned(space, task);
     final myId   = AuthStore.instance.userId;
+    final Set<String> pushed = {};
 
     for (final assignee in task.assignedTo) {
       // Normalise sentinels that come from the UI assignment picker.
@@ -537,7 +592,8 @@ class TaskStore extends ChangeNotifier {
       if (resolvedName == null) continue; // unknown / deleted user
 
       final uid = AuthStore.instance.userIdForName(resolvedName);
-      if (uid == null) continue;
+      if (uid == null || pushed.contains(uid)) continue;
+      pushed.add(uid);
 
       if (uid == myId) {
         _addSpaceNotif(notif);
@@ -638,9 +694,11 @@ class TaskStore extends ChangeNotifier {
 
   Future<void> _pushToOtherMembers(Space space, AppNotification notif) async {
     final myId = AuthStore.instance.userId;
+    final Set<String> pushed = {};
     for (final member in space.members) {
       final uid = AuthStore.instance.userIdForName(member);
-      if (uid == null || uid == myId) continue;
+      if (uid == null || uid == myId || pushed.contains(uid)) continue;
+      pushed.add(uid);
       await _pushToUser(uid, notif);
     }
   }
@@ -912,6 +970,7 @@ class TaskStore extends ChangeNotifier {
   }
 
   void _addNotification(AppNotification notif) {
+    if (_notifications.any((n) => n.id == notif.id)) return;
     _notifications.insert(0, notif);
   }
 

@@ -63,6 +63,17 @@ class _SpacesSheetState extends State<SpacesSheet> {
 
   void _setFilter(String? filter) => setState(() => _activeFilter = filter);
 
+  @override
+  void didUpdateWidget(SpacesSheet old) {
+    super.didUpdateWidget(old);
+    // If all spaces were removed, clear any active filter so the empty state
+    // shows "No spaces yet / Tap to add one" rather than "No X spaces / Try a
+    // different filter".
+    if (widget.spaces.isEmpty && _activeFilter != null) {
+      _activeFilter = null;
+    }
+  }
+
   // ── Header height ──────────────────────────────────────────
   // Fixed pixel height for the pinned SliverAppBar.
   // Drag handle (4px pill + 12 top + 16 bottom margin) = 32
@@ -122,14 +133,13 @@ class _SpacesSheetState extends State<SpacesSheet> {
         if (filtered.isEmpty)
           SliverFillRemaining(
             hasScrollBody: false,
-            child: GestureDetector(
-              // Tapping the empty state when there is no filter active opens
-              // the create-space sheet directly, matching the hint text.
-              onTap: _activeFilter == null ? widget.onAdd : null,
-              behavior: HitTestBehavior.opaque,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 40),
-                child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child: GestureDetector(
+                  // Tapping the empty state when there is no filter active opens
+                  // the create-space sheet directly, matching the hint text.
+                  onTap: _activeFilter == null ? widget.onAdd : null,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [

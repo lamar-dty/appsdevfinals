@@ -33,10 +33,16 @@ class SpaceChatStore extends ChangeNotifier {
         final raw = prefs.getString(kSpaceChatMessages(code));
         if (raw != null) {
           final list = jsonDecode(raw) as List;
-          _messages[code] = list
-              .map((e) =>
-                  SpaceMessage.fromJson(Map<String, dynamic>.from(e as Map)))
-              .toList();
+          final messages = <SpaceMessage>[];
+          for (final e in list) {
+            try {
+              messages.add(SpaceMessage.fromJson(
+                  Map<String, dynamic>.from(e as Map)));
+            } catch (_) {
+              // Corrupt single message — skip it, keep the rest.
+            }
+          }
+          _messages[code] = messages;
         }
       } catch (_) {
         // Corrupt message log for this space — start fresh.
@@ -84,6 +90,7 @@ class SpaceChatStore extends ChangeNotifier {
   /// Delete all messages and cursors for [spaceCode] when a space is
   /// deleted or the user leaves.
   Future<void> deleteMessagesFor(String spaceCode) async {
+    if (spaceCode.isEmpty) return;
     _messages.remove(spaceCode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(kSpaceChatMessages(spaceCode));
@@ -102,9 +109,13 @@ class SpaceChatStore extends ChangeNotifier {
     Space? space,
     String? currentUser,
   }) async {
+    if (spaceCode.isEmpty) return;
     messagesFor(spaceCode).add(message);
 
-    if (space != null && currentUser != null && !message.isSystemMessage) {
+    if (space != null &&
+        currentUser != null &&
+        !message.isSystemMessage &&
+        message.sender.isNotEmpty) {
       await TaskStore.instance.notifyNewChatMessage(
         space,
         message.sender,
@@ -126,6 +137,7 @@ class SpaceChatStore extends ChangeNotifier {
       '$spaceCode|$currentUser';
 
   void markAsRead(String spaceCode, String currentUser) {
+    if (spaceCode.isEmpty || currentUser.isEmpty) return;
     final msgs      = messagesFor(spaceCode);
     final key       = _cursorKey(spaceCode, currentUser);
     final lastIndex = msgs.length - 1;
@@ -137,6 +149,7 @@ class SpaceChatStore extends ChangeNotifier {
   }
 
   int unreadCountFor(String spaceCode, String currentUser) {
+    if (spaceCode.isEmpty || currentUser.isEmpty) return 0;
     final msgs   = messagesFor(spaceCode);
     final cursor = _readCursors[_cursorKey(spaceCode, currentUser)] ?? -1;
     var count = 0;

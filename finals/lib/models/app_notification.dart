@@ -123,7 +123,10 @@ class AppNotification {
   Color get iconBgColor => iconColor.withOpacity(0.15);
 
   // ── Convenience ───────────────────────────────────────────
-  bool get isSpaceNotification => spaceInviteCode != null;
+  /// True only when a non-empty invite code is present — empty string is
+  /// treated as absent so routing never attempts to open a ghost space.
+  bool get isSpaceNotification =>
+      spaceInviteCode != null && spaceInviteCode!.isNotEmpty;
 
   /// Returns true for notification types that should route to a specific
   /// space task rather than just the space overview.
@@ -164,31 +167,69 @@ class AppNotification {
         'spaceAccentColor': spaceAccentColor?.value,
       };
 
-  factory AppNotification.fromJson(Map<String, dynamic> j) =>
-      AppNotification(
-        id: j['id'] as String,
-        type: NotificationType.values[j['type'] as int],
-        sourceId: j['sourceId'] as String,
-        // secondaryId is new — gracefully absent in old persisted data
-        secondaryId: j['secondaryId'] as String?,
-        title: j['title'] as String,
-        subtitle: j['subtitle'] as String,
-        detail: j['detail'] as String,
-        createdAt:
-            DateTime.fromMillisecondsSinceEpoch(j['createdAt'] as int),
-        isRead: j['isRead'] as bool,
-        taskCategory: j['taskCategory'] == null
-            ? null
-            : TaskCategory.values[j['taskCategory'] as int],
-        priority: j['priority'] == null
-            ? null
-            : TaskPriority.values[j['priority'] as int],
-        eventCategory: j['eventCategory'] == null
-            ? null
-            : EventCategory.values[j['eventCategory'] as int],
-        spaceInviteCode: j['spaceInviteCode'] as String?,
-        spaceAccentColor: j['spaceAccentColor'] == null
-            ? null
-            : Color(j['spaceAccentColor'] as int),
-      );
+  factory AppNotification.fromJson(Map<String, dynamic> j) {
+    // ── type — guard against out-of-range index from future enum versions ──
+    final typeIndex = (j['type'] as num?)?.toInt() ?? 0;
+    final type = (typeIndex >= 0 && typeIndex < NotificationType.values.length)
+        ? NotificationType.values[typeIndex]
+        : NotificationType.taskReminder; // safe fallback
+
+    // ── taskCategory — guard against out-of-range or missing index ─────────
+    final taskCatRaw = j['taskCategory'];
+    final taskCatIndex = taskCatRaw != null ? (taskCatRaw as num).toInt() : -1;
+    final taskCategory = (taskCatIndex >= 0 &&
+            taskCatIndex < TaskCategory.values.length)
+        ? TaskCategory.values[taskCatIndex]
+        : null;
+
+    // ── priority — guard against out-of-range or missing index ─────────────
+    final priorityRaw = j['priority'];
+    final priorityIndex =
+        priorityRaw != null ? (priorityRaw as num).toInt() : -1;
+    final priority =
+        (priorityIndex >= 0 && priorityIndex < TaskPriority.values.length)
+            ? TaskPriority.values[priorityIndex]
+            : null;
+
+    // ── eventCategory — guard against out-of-range or missing index ────────
+    final evtCatRaw = j['eventCategory'];
+    final evtCatIndex =
+        evtCatRaw != null ? (evtCatRaw as num).toInt() : -1;
+    final eventCategory = (evtCatIndex >= 0 &&
+            evtCatIndex < EventCategory.values.length)
+        ? EventCategory.values[evtCatIndex]
+        : null;
+
+    // ── spaceAccentColor — guard against wrong runtime type ─────────────────
+    final colorRaw = j['spaceAccentColor'];
+    final spaceAccentColor =
+        colorRaw != null ? Color((colorRaw as num).toInt()) : null;
+
+    // ── createdAt — use num.toInt() to tolerate JSON double coercion ────────
+    final createdAt = DateTime.fromMillisecondsSinceEpoch(
+        (j['createdAt'] as num).toInt());
+
+    // ── isRead — tolerate legacy int (0/1) encoding ─────────────────────────
+    final isReadRaw = j['isRead'];
+    final isRead = isReadRaw is bool
+        ? isReadRaw
+        : (isReadRaw is num ? isReadRaw != 0 : false);
+
+    return AppNotification(
+      id: (j['id'] as String?) ?? '',
+      type: type,
+      sourceId: (j['sourceId'] as String?) ?? '',
+      secondaryId: j['secondaryId'] as String?,
+      title: (j['title'] as String?) ?? '',
+      subtitle: (j['subtitle'] as String?) ?? '',
+      detail: (j['detail'] as String?) ?? '',
+      createdAt: createdAt,
+      isRead: isRead,
+      taskCategory: taskCategory,
+      priority: priority,
+      eventCategory: eventCategory,
+      spaceInviteCode: j['spaceInviteCode'] as String?,
+      spaceAccentColor: spaceAccentColor,
+    );
+  }
 }

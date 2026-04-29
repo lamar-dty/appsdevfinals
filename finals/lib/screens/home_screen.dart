@@ -500,7 +500,7 @@ class _NotificationSheetState extends State<_NotificationSheet> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      "Create a task to get started!",
+                      "It’s quiet here…",
                       style: TextStyle(
                         color: kNavyDark.withOpacity(0.28),
                         fontSize: 13,

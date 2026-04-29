@@ -17,7 +17,12 @@ class DashboardBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BottomAppBar(
+    return GestureDetector(
+      // Absorb any tap that lands on the bar background between icons
+      // so nothing fires except the 4 _NavItem GestureDetectors.
+      onTap: () {},
+      behavior: HitTestBehavior.opaque,
+      child: BottomAppBar(
       color: kTeal,
       shape: const CircularNotchedRectangle(),
       notchMargin: 10,
@@ -38,6 +43,7 @@ class DashboardBottomNav extends StatelessWidget {
             _NavItem(icon: Icons.account_balance_wallet_rounded, index: 3, selectedIndex: selectedIndex, onTap: onTap),
           ],
         ),
+      ),
       ),
     );
   }
@@ -62,7 +68,6 @@ class _NavItem extends StatelessWidget {
             && TaskStore.instance.hasUnreadNotifications;
         return GestureDetector(
           onTap: () => onTap(index),
-          behavior: HitTestBehavior.opaque,
           child: TweenAnimationBuilder<double>(
             tween: Tween(end: selected ? -14.0 : 0.0),
             duration: const Duration(milliseconds: 250),
