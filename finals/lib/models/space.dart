@@ -270,12 +270,20 @@ class Space {
         'inviteCode':     inviteCode,
       };
 
+  /// Ensures exactly one space on each side of the dash in a date-range string.
+  /// Heals legacy values stored without surrounding spaces (e.g.
+  /// "04/19/26-05/20/26" → "04/19/26 - 05/20/26").
+  static String _normaliseDateRange(String raw) {
+    if (raw.isEmpty) return raw;
+    return raw.replaceAll(RegExp(r'\s*-\s*'), ' - ');
+  }
+
   factory Space.fromJson(Map<String, dynamic> j) {
     final status = (j['status'] as String?) ?? 'Not Started';
     return Space(
       name:           (j['name']        as String?) ?? '',
       description:    (j['description'] as String?) ?? '',
-      dateRange:      (j['dateRange']   as String?) ?? '',
+      dateRange:      _normaliseDateRange((j['dateRange'] as String?) ?? ''),
       dueDate:        (j['dueDate']     as String?) ?? '',
       members:        List<String>.from(
           (j['members'] as List?)?.whereType<String>().toList() ?? []),

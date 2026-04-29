@@ -673,20 +673,7 @@ class _CreateSpaceSheetState extends State<CreateSpaceSheet>
                   Row(
                     children: [
                       _FieldLabel(label: 'Task Checklist', icon: Icons.checklist_rounded),
-                      if (_checklist.isNotEmpty) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: _accent.withOpacity(0.18),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            '${_checklist.where((c) => c.done).length}/${_checklist.length}',
-                            style: TextStyle(color: _accent, fontSize: 10, fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ],
+
                       const Spacer(),
                       GestureDetector(
                         onTap: _showAddChecklistDialog,

@@ -32,8 +32,21 @@ class AppNotification {
   final String id;
   final NotificationType type;
 
-  /// ID of the linked task, event, OR space — used for grouping / deletion.
+  /// Primary source ID:
+  ///   - personal task/event → the task.id / event.id
+  ///   - space notification  → the space.inviteCode
   final String sourceId;
+
+  /// Secondary deep-link ID — optional, type-specific:
+  ///   - spaceTaskAdded / spaceTaskAssigned / spaceTaskStatus /
+  ///     spaceTaskCompleted / spaceTaskDueSoon / spaceTaskOverdue
+  ///       → SpaceTask.title (used to locate the task inside the space)
+  ///   - spaceChatMessage → message timestamp string (for scroll-to)
+  ///   Future: commentId, mentionId, etc.
+  ///
+  /// When null the router falls back to opening the parent context
+  /// (the space overview or personal task list) rather than crashing.
+  final String? secondaryId;
 
   final String title;
   final String subtitle;
@@ -63,6 +76,7 @@ class AppNotification {
     required this.title,
     required this.subtitle,
     required this.detail,
+    this.secondaryId,
     this.taskCategory,
     this.priority,
     this.eventCategory,
@@ -95,13 +109,12 @@ class AppNotification {
       case NotificationType.spaceTaskCompleted: return Icons.task_alt_rounded;
       case NotificationType.spaceTaskDueSoon:   return Icons.schedule_rounded;
       case NotificationType.spaceTaskOverdue:   return Icons.warning_amber_rounded;
-      case NotificationType.spaceDeleted:        return Icons.delete_forever_rounded;
+      case NotificationType.spaceDeleted:       return Icons.delete_forever_rounded;
     }
   }
 
   // ── Colour helpers ────────────────────────────────────────
   Color get iconColor {
-    // Space notifications use the space accent colour when available.
     if (spaceAccentColor != null) return spaceAccentColor!;
     if (eventCategory != null) return eventCategory!.color;
     return taskCategory?.color ?? const Color(0xFF9B88E8);
@@ -109,8 +122,28 @@ class AppNotification {
 
   Color get iconBgColor => iconColor.withOpacity(0.15);
 
-  // ── Convenience: is this a space notification? ────────────
+  // ── Convenience ───────────────────────────────────────────
   bool get isSpaceNotification => spaceInviteCode != null;
+
+  /// Returns true for notification types that should route to a specific
+  /// space task rather than just the space overview.
+  bool get isSpaceTaskNotification {
+    switch (type) {
+      case NotificationType.spaceTaskAdded:
+      case NotificationType.spaceTaskAssigned:
+      case NotificationType.spaceTaskStatus:
+      case NotificationType.spaceTaskCompleted:
+      case NotificationType.spaceTaskDueSoon:
+      case NotificationType.spaceTaskOverdue:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /// Returns true for types that should open the space chat directly.
+  bool get isSpaceChatNotification =>
+      type == NotificationType.spaceChatMessage;
 
   // ── Serialisation ─────────────────────────────────────────
 
@@ -118,6 +151,7 @@ class AppNotification {
         'id': id,
         'type': type.index,
         'sourceId': sourceId,
+        'secondaryId': secondaryId,
         'title': title,
         'subtitle': subtitle,
         'detail': detail,
@@ -135,6 +169,8 @@ class AppNotification {
         id: j['id'] as String,
         type: NotificationType.values[j['type'] as int],
         sourceId: j['sourceId'] as String,
+        // secondaryId is new — gracefully absent in old persisted data
+        secondaryId: j['secondaryId'] as String?,
         title: j['title'] as String,
         subtitle: j['subtitle'] as String,
         detail: j['detail'] as String,

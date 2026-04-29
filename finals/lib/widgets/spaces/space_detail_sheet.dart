@@ -599,20 +599,36 @@ class _SelectedBackgroundState extends State<SelectedBackground> {
 
           // Task list or empty state
           if (space.tasks.isEmpty)
-  GestureDetector(
-    onTap: space.isCreator ? widget.onAddTask : null,
-
+            GestureDetector(
+              onTap: space.isCreator ? widget.onAddTask : null,
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 20),
                 child: Center(
                   child: Column(
                     children: [
-                      Icon(Icons.add_task_rounded,
-                          color: kWhite.withOpacity(0.25), size: 36),
+                      Icon(
+                        space.isCreator
+                            ? Icons.add_task_rounded
+                            : Icons.hourglass_empty_rounded,
+                        color: kWhite.withOpacity(0.25),
+                        size: 36,
+                      ),
                       const SizedBox(height: 8),
-                      Text('No tasks yet — tap to add one',
-                          style:
-                              TextStyle(color: kSubtitle, fontSize: 13)),
+                      Text(
+                        space.isCreator
+                            ? 'No tasks yet — tap to add one'
+                            : 'No tasks yet',
+                        style: TextStyle(color: kSubtitle, fontSize: 13),
+                      ),
+                      if (!space.isCreator) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Tasks added by the creator will appear here',
+                          style: TextStyle(
+                              color: kSubtitle.withOpacity(0.6),
+                              fontSize: 11),
+                        ),
+                      ],
                     ],
                   ),
                 ),

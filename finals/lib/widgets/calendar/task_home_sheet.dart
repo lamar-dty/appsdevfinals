@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import '../../constants/colors.dart';
 import '../../models/task.dart';
 import '../../store/task_store.dart';
+import 'task_detail_sheet.dart';
 
 // ─────────────────────────────────────────────────────────────
 // TaskHomeSheet — live task list with timeline-style layout
@@ -30,7 +31,33 @@ class _TaskHomeSheetState extends State<TaskHomeSheet> {
     super.dispose();
   }
 
-  void _onStoreChanged() => setState(() {});
+  void _onStoreChanged() {
+    if (!mounted) return;
+    // Consume any pending task-open request from NotificationRouter.
+    final pendingId = TaskStore.instance.pendingOpenTaskId;
+    if (pendingId != null) {
+      TaskStore.instance.clearPendingOpenTask();
+      // Wait for the sheet expand animation (350ms) before showing the modal.
+      Future.delayed(const Duration(milliseconds: 400), () {
+        if (!mounted) return;
+        final found = showTaskDetailSheet(context, pendingId);
+        if (!found) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: const Color(0xFF1A2A5E),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              content: const Text('This task no longer exists.',
+                  style: TextStyle(color: Colors.white, fontSize: 13)),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      });
+    }
+    setState(() {});
+  }
 
   List<Task> _sorted(List<Task> tasks) {
     final list = List<Task>.from(tasks);

@@ -315,6 +315,42 @@ class TaskStore extends ChangeNotifier {
     _saveNotifications();
   }
 
+  // ── Deep-link open requests ───────────────────────────────
+  // NotificationRouter calls these to signal the UI to open a
+  // specific task or event. Screens listen via addListener and
+  // consume + clear the pending ID in a post-frame callback.
+
+  String? _pendingOpenTaskId;
+  String? _pendingOpenEventId;
+
+  String? get pendingOpenTaskId  => _pendingOpenTaskId;
+  String? get pendingOpenEventId => _pendingOpenEventId;
+
+  /// Signal that the UI should open the task detail sheet for [taskId].
+  void requestOpenTask(String taskId) {
+    _pendingOpenTaskId = taskId;
+    notifyListeners();
+  }
+
+  /// Consume the pending task open request (call from the UI after handling).
+  void clearPendingOpenTask() {
+    if (_pendingOpenTaskId == null) return;
+    _pendingOpenTaskId = null;
+    // No notifyListeners — clearing is silent to avoid re-triggering.
+  }
+
+  /// Signal that the UI should open the event detail sheet for [eventId].
+  void requestOpenEvent(String eventId) {
+    _pendingOpenEventId = eventId;
+    notifyListeners();
+  }
+
+  /// Consume the pending event open request (call from the UI after handling).
+  void clearPendingOpenEvent() {
+    if (_pendingOpenEventId == null) return;
+    _pendingOpenEventId = null;
+  }
+
   // ── Space notifications — public API ─────────────────────
 
   void notifySpaceCreated(Space space) =>

@@ -5,31 +5,35 @@ import '../../models/event.dart';
 import '../../store/task_store.dart';
 
 /// Shows a modal bottom sheet with full task details.
-void showTaskDetailSheet(BuildContext context, String taskId) {
-  final task = TaskStore.instance.tasks.firstWhere(
-    (t) => t.id == taskId,
-    orElse: () => throw StateError('Task $taskId not found'),
-  );
+/// Returns false if the task no longer exists (caller can show a snackbar).
+bool showTaskDetailSheet(BuildContext context, String taskId) {
+  final task = TaskStore.instance.tasks
+      .where((t) => t.id == taskId)
+      .firstOrNull;
+  if (task == null) return false;
   showModalBottomSheet(
     context: context,
     backgroundColor: Colors.transparent,
     isScrollControlled: true,
     builder: (_) => _TaskDetailSheet(task: task),
   );
+  return true;
 }
 
 /// Shows a modal bottom sheet with full event details.
-void showEventDetailSheet(BuildContext context, String eventId) {
-  final event = TaskStore.instance.events.firstWhere(
-    (e) => e.id == eventId,
-    orElse: () => throw StateError('Event $eventId not found'),
-  );
+/// Returns false if the event no longer exists.
+bool showEventDetailSheet(BuildContext context, String eventId) {
+  final event = TaskStore.instance.events
+      .where((e) => e.id == eventId)
+      .firstOrNull;
+  if (event == null) return false;
   showModalBottomSheet(
     context: context,
     backgroundColor: Colors.transparent,
     isScrollControlled: true,
     builder: (_) => _EventDetailSheet(event: event),
   );
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

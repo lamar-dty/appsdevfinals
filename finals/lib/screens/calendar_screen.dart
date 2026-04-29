@@ -2,17 +2,20 @@ import 'package:flutter/material.dart';
 import '../constants/colors.dart';
 import '../widgets/calendar/weekly_planner_calendar.dart';
 import '../widgets/calendar/task_home_sheet.dart';
+import '../store/task_store.dart';
 
 class CalendarScreen extends StatefulWidget {
   final int calStartHour;
   final int calEndHour;
   final void Function(int start, int end) onRangeChanged;
+  final ValueNotifier<int> tabNotifier;
 
   const CalendarScreen({
     super.key,
     required this.calStartHour,
     required this.calEndHour,
     required this.onRangeChanged,
+    required this.tabNotifier,
   });
 
   @override
@@ -33,6 +36,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     super.initState();
     _sheetController = DraggableScrollableController();
     _sheetController.addListener(_onSheetSizeChanged);
+    widget.tabNotifier.addListener(_onTabChanged);
+    TaskStore.instance.addListener(_onStoreChanged);
   }
 
   void _onSheetSizeChanged() {
@@ -40,10 +45,37 @@ class _CalendarScreenState extends State<CalendarScreen> {
     setState(() => _sheetSize = _sheetController.size);
   }
 
+  // Collapse sheet when navigating away from Calendar tab (index 1).
+  void _onTabChanged() {
+    if (!mounted) return;
+    if (widget.tabNotifier.value == 1) return; // staying on calendar — no-op
+    if (!_sheetController.isAttached) return;
+    _sheetController.animateTo(
+      _snapPeek,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _onStoreChanged() {
+    if (!mounted) return;
+    // When a task open is requested, expand the sheet to half so the
+    // TaskHomeSheet is visible before it opens the detail modal.
+    if (TaskStore.instance.pendingOpenTaskId != null) {
+      _sheetController.animateTo(
+        _snapHalf,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
   @override
   void dispose() {
     _sheetController.removeListener(_onSheetSizeChanged);
     _sheetController.dispose();
+    widget.tabNotifier.removeListener(_onTabChanged);
+    TaskStore.instance.removeListener(_onStoreChanged);
     super.dispose();
   }
 

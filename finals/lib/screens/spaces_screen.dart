@@ -11,14 +11,18 @@ import '../widgets/spaces/spaces_list_sheet.dart';
 import '../widgets/spaces/space_detail_sheet.dart';
 import '../widgets/spaces/space_dialogs.dart';
 import '../widgets/spaces/space_chat_fab.dart';
+import '../widgets/spaces/space_chat_sheet.dart';
 import '../store/space_store.dart';
 import '../store/auth_store.dart';
+import '../services/notification_router.dart';
 
 // ─────────────────────────────────────────────────────────────
 // Screen
 // ─────────────────────────────────────────────────────────────
 class SpacesScreen extends StatefulWidget {
-  const SpacesScreen({super.key});
+  final ValueNotifier<int> tabNotifier;
+
+  const SpacesScreen({super.key, required this.tabNotifier});
 
   @override
   State<SpacesScreen> createState() => SpacesScreenState();
@@ -44,9 +48,17 @@ class SpacesScreenState extends State<SpacesScreen>
     _sheetController.addListener(() {
       if (mounted) setState(() => _sheetSize = _sheetController.size);
     });
+    widget.tabNotifier.addListener(_onTabChanged);
     _switchAnim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 280),
+    );
+    // Register deep-link callbacks so NotificationRouter can open spaces,
+    // tasks, and chat panels from notification taps.
+    NotificationRouter.instance.registerSpaceCallbacks(
+      onOpenSpace:     openSpaceByCode,
+      onOpenSpaceChat: openSpaceChatByCode,
+      onOpenSpaceTask: openSpaceTaskByCode,
     );
   }
 
@@ -96,9 +108,23 @@ class SpacesScreenState extends State<SpacesScreen>
 
   @override
   void dispose() {
+    NotificationRouter.instance.unregisterSpaceCallbacks();
+    widget.tabNotifier.removeListener(_onTabChanged);
     _sheetController.dispose();
     _switchAnim.dispose();
     super.dispose();
+  }
+
+  // Collapse sheet when navigating away from Spaces tab (index 2).
+  void _onTabChanged() {
+    if (!mounted) return;
+    if (widget.tabNotifier.value == 2) return; // staying on spaces — no-op
+    if (!_sheetController.isAttached) return;
+    _sheetController.animateTo(
+      _snapPeek,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
   }
 
   // ── Public entry point for create_space_sheet ──────────────
@@ -112,6 +138,65 @@ class SpacesScreenState extends State<SpacesScreen>
     // Push a pending invite to every member added at creation time so their
     // device receives the space on next drainPendingInvites().
     await _pushInvitesToAddedMembers(space);
+  }
+
+  // ── Deep-link public API (called by NotificationRouter) ───
+  /// Opens the space overview for the given invite code.
+  /// Safe to call from outside — validates existence defensively.
+  void openSpaceByCode(String inviteCode) {
+    final space = SpaceStore.instance.spaces
+        .where((s) => s.inviteCode == inviteCode)
+        .firstOrNull;
+    if (space == null) return; // space deleted — router shows snackbar
+    _selectSpace(space);
+  }
+
+  /// Opens the space and then immediately shows the chat sheet.
+  void openSpaceChatByCode(String inviteCode) {
+    final space = SpaceStore.instance.spaces
+        .where((s) => s.inviteCode == inviteCode)
+        .firstOrNull;
+    if (space == null) return;
+    _selectSpace(space);
+    // Give the sheet animation a frame to settle, then open chat.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        useSafeArea: false,
+        builder: (_) => DraggableScrollableSheet(
+          initialChildSize: 0.92,
+          minChildSize: 0.5,
+          maxChildSize: 1.0,
+          expand: false,
+          snap: true,
+          snapSizes: const [0.5, 0.92, 1.0],
+          builder: (ctx, scrollController) => SpaceChatSheet(
+            space: space,
+            currentUser: _resolvedCurrentUser(space),
+          ),
+        ),
+      );
+    });
+  }
+
+  /// Opens the space and then immediately taps the matching task.
+  void openSpaceTaskByCode(String inviteCode, String taskTitle) {
+    final space = SpaceStore.instance.spaces
+        .where((s) => s.inviteCode == inviteCode)
+        .firstOrNull;
+    if (space == null) return;
+    _selectSpace(space);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final task = space.tasks
+          .where((t) => t.title == taskTitle)
+          .firstOrNull;
+      if (task == null) return; // task deleted — fail silently (snackbar shown by router)
+      _onTaskTapped(space, task);
+    });
   }
 
   // ── Navigation ─────────────────────────────────────────────
@@ -662,7 +747,7 @@ class SpacesScreenState extends State<SpacesScreen>
       name: r.name,
       description:
           r.description.isEmpty ? 'No description.' : r.description,
-      dateRange: '${fmt(r.startDate)}- ${fmt(r.endDate)}',
+      dateRange: '${fmt(r.startDate)} - ${fmt(r.endDate)}',
       dueDate: '${r.endDate.month}/${r.endDate.day}/${r.endDate.year}',
       members: List<String>.from(r.members),
       isCreator: true,

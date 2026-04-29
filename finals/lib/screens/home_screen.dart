@@ -6,9 +6,12 @@ import '../widgets/notification_item.dart';
 import '../store/space_store.dart';
 import '../store/auth_store.dart';
 import '../store/space_chat_store.dart';
+import '../services/notification_router.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final ValueNotifier<int> tabNotifier;
+
+  const HomeScreen({super.key, required this.tabNotifier});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -25,6 +28,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _sheetController = DraggableScrollableController();
+    widget.tabNotifier.addListener(_onTabChanged);
     // Drain the shared inbox so cross-user notifications (including
     // spaceDeleted alerts) appear immediately on the home tab.
     // Also drain deletion notices so the Spaces tab stays consistent even
@@ -39,8 +43,23 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  // Collapse sheet when navigating away from this tab (index 0).
+  // Guard: controller must be attached (sheet may not have built yet on
+  // very first frame) and widget must still be mounted.
+  void _onTabChanged() {
+    if (!mounted) return;
+    if (widget.tabNotifier.value == 0) return; // staying on home tab — no-op
+    if (!_sheetController.isAttached) return;
+    _sheetController.animateTo(
+      _snapPeek,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+  }
+
   @override
   void dispose() {
+    widget.tabNotifier.removeListener(_onTabChanged);
     _sheetController.dispose();
     super.dispose();
   }
@@ -550,6 +569,8 @@ class _NotificationSheetState extends State<_NotificationSheet> {
                       showDashedLine: i < sorted.length - 1,
                       priority: sorted[i].priority,
                       isRead: sorted[i].isRead,
+                      onTap: () => NotificationRouter.instance
+                          .route(context, sorted[i]),
                     ),
                   ),
               ],
