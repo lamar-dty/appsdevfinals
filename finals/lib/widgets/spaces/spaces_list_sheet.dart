@@ -122,33 +122,39 @@ class _SpacesSheetState extends State<SpacesSheet> {
         if (filtered.isEmpty)
           SliverFillRemaining(
             hasScrollBody: false,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 40),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.group_work_outlined,
-                        size: 60, color: kNavyDark.withOpacity(0.1)),
-                    const SizedBox(height: 14),
-                    Text(
-                      _activeFilter == null
-                          ? 'No spaces yet'
-                          : 'No $_activeFilter spaces',
-                      style: TextStyle(
-                          color: kNavyDark.withOpacity(0.4),
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      _activeFilter == null
-                          ? 'Tap + to create your first space'
-                          : 'Try a different filter',
-                      style: TextStyle(
-                          color: kNavyDark.withOpacity(0.25), fontSize: 13),
-                    ),
-                  ],
+            child: GestureDetector(
+              // Tapping the empty state when there is no filter active opens
+              // the create-space sheet directly, matching the hint text.
+              onTap: _activeFilter == null ? widget.onAdd : null,
+              behavior: HitTestBehavior.opaque,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 40),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.group_work_outlined,
+                          size: 60, color: kNavyDark.withOpacity(0.1)),
+                      const SizedBox(height: 14),
+                      Text(
+                        _activeFilter == null
+                            ? 'No spaces yet'
+                            : 'No $_activeFilter spaces',
+                        style: TextStyle(
+                            color: kNavyDark.withOpacity(0.4),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _activeFilter == null
+                            ? 'Tap to add one'
+                            : 'Try a different filter',
+                        style: TextStyle(
+                            color: kNavyDark.withOpacity(0.25), fontSize: 13),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

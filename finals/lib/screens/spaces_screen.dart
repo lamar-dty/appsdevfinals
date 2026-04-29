@@ -300,6 +300,30 @@ class SpacesScreenState extends State<SpacesScreen>
     setState(() {
       if (_selectedSpace == space) _selectedSpace = null;
     });
+
+    // Reset scroll to top so the sheet's drag gesture isn't locked by a
+    // stale scroll offset left over from the deleted space's content.
+    final sc = _sheetScrollController;
+    if (sc != null && sc.hasClients) {
+      try {
+        final pos = sc.position;
+        if (pos.pixels > pos.minScrollExtent) {
+          sc.jumpTo(pos.minScrollExtent);
+        }
+      } catch (_) {
+        // Controller detached — safe to ignore.
+      }
+    }
+
+    // Re-seat the sheet at peek so DraggableScrollableSheet re-registers
+    // its drag correctly after the list content changes.
+    if (_sheetController.isAttached) {
+      _sheetController.animateTo(
+        _snapPeek,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   // ── Dialog bridges ─────────────────────────────────────────
@@ -434,14 +458,7 @@ class SpacesScreenState extends State<SpacesScreen>
       isAlreadyJoined: (code) => _spaces.any((s) => s.inviteCode == code),
       onJoin: (code) async {
         final found = await SpaceStore.instance.lookupByCode(code);
-        if (found == null) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('No space found with that invite code.')),
-            );
-          }
-          return;
-        }
+        if (found == null) return 'No space found with that invite code';
 
         final joined = Space(
           name: found.name,
@@ -480,6 +497,7 @@ class SpacesScreenState extends State<SpacesScreen>
             '${AuthStore.instance.displayName} joined the space.',
           );
         });
+        return null;
       },
     );
   }
@@ -665,6 +683,18 @@ class SpacesScreenState extends State<SpacesScreen>
               currentUser: _resolvedCurrentUser(space),
             ),
           ),
+
+        // ── NAV BAR TOUCH BLOCKER ────────────────────────────
+        // Prevents taps in the BottomAppBar zone from leaking
+        // through to the DraggableScrollableSheet behind it.
+        // Does NOT restrict sheet height or dragging behavior.
+        const Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: 56,
+          child: AbsorbPointer(absorbing: true),
+        ),
       ],
     );
   }

@@ -4,6 +4,7 @@ import '../../constants/colors.dart';
 import '../../models/task.dart';
 import '../../store/task_store.dart';
 import 'task_detail_sheet.dart';
+import '../create_task_sheet.dart';
 
 // ─────────────────────────────────────────────────────────────
 // TaskHomeSheet — live task list with timeline-style layout
@@ -151,13 +152,13 @@ class _TaskHomeSheetState extends State<TaskHomeSheet> {
         //
         // toolbarHeight pixel breakdown (no-tasks / with-tasks):
         //   drag handle  : 12 top + 4 + 18 bottom           =  34
-        //   header row   : icon 38 + col text ~30            =  38  (tallest child)
+        //   header row   : plain text ~28                    =  28
         //   SizedBox(20) :                                   =  20
         //   Divider(h:1) :                                   =   1
         //   controls row : pad-top 8 + ~28 content + pad-b 6=  44
-        //   ── no-tasks subtotal ──────────────────────────────  137  → 140 (+3 guard)
+        //   ── no-tasks subtotal ──────────────────────────────  127  → 130 (+3 guard)
         //   donut block  : pad-top 14 + Row height 110       = 124
-        //   ── with-tasks total ───────────────────────────────  261  → 278 (+17 guard)
+        //   ── with-tasks total ───────────────────────────────  251  → 268 (+17 guard)
         // The guard absorbs sub-pixel rounding and mild font-scale variance.
         SliverAppBar(
           pinned: true,
@@ -166,7 +167,7 @@ class _TaskHomeSheetState extends State<TaskHomeSheet> {
           surfaceTintColor: Colors.transparent,
           shadowColor: Colors.transparent,
           elevation: 0,
-          toolbarHeight: store.total > 0 ? 278.0 : 140.0,
+          toolbarHeight: store.total > 0 ? 268.0 : 130.0,
           flexibleSpace: FlexibleSpaceBar(
             collapseMode: CollapseMode.none,
             background: _TaskSheetHeader(
@@ -184,7 +185,7 @@ class _TaskHomeSheetState extends State<TaskHomeSheet> {
           SliverFillRemaining(
             hasScrollBody: false,
             fillOverscroll: false,
-            child: _EmptyState(),
+            child: _EmptyState(context: context),
           )
         else
           SliverPadding(
@@ -250,33 +251,17 @@ class _TaskSheetHeader extends StatelessWidget {
 
           // ── Header row ──────────────────────────────────────
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Container(
-                  width: 38, height: 38,
-                  decoration: BoxDecoration(
-                    color: kTeal.withOpacity(0.13),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: kTeal.withOpacity(0.28), width: 1.4),
-                  ),
-                  child: const Icon(Icons.task_alt_rounded, color: kTeal, size: 19),
+                const Text(
+                  'My Tasks',
+                  style: TextStyle(
+                      color: kNavyDark,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(width: 11),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('My Tasks',
-                        style: TextStyle(color: kNavyDark, fontSize: 17, fontWeight: FontWeight.bold)),
-                    Text(
-                      store.total == 0
-                          ? 'Nothing yet — tap + to begin'
-                          : '${store.completed} of ${store.total} completed',
-                      style: const TextStyle(color: Color(0xFF6B7A99), fontSize: 12),
-                    ),
-                  ],
-                ),
-                const Spacer(),
                 if (store.total > 0)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -849,29 +834,34 @@ class _DonutStatRow extends StatelessWidget {
 // Empty state
 // ─────────────────────────────────────────────────────────────
 class _EmptyState extends StatelessWidget {
+  final BuildContext context;
+  const _EmptyState({required this.context});
+
   @override
   Widget build(BuildContext context) {
-    return Center(
+    return GestureDetector(
+      onTap: () => showCreateTaskSheet(context),
+      behavior: HitTestBehavior.opaque,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 36),
-        child: Column(
-          children: [
-            Container(
-              width: 64, height: 64,
-              decoration: BoxDecoration(
-                color: kTeal.withOpacity(0.08),
-                shape: BoxShape.circle,
-                border: Border.all(color: kTeal.withOpacity(0.18), width: 1.5),
-              ),
-              child: Icon(Icons.task_alt_rounded, size: 28, color: kTeal.withOpacity(0.5)),
-            ),
-            const SizedBox(height: 14),
-            Text('No tasks yet',
-                style: TextStyle(color: kNavyDark.withOpacity(0.5), fontSize: 15, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 5),
-            Text('Tap + to add your first task',
-                style: TextStyle(color: kNavyDark.withOpacity(0.3), fontSize: 13)),
-          ],
+        padding: const EdgeInsets.symmetric(vertical: 40),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.task_alt_rounded,
+                  size: 60, color: kNavyDark.withOpacity(0.1)),
+              const SizedBox(height: 14),
+              Text('No tasks yet',
+                  style: TextStyle(
+                      color: kNavyDark.withOpacity(0.4),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Text('Tap to add your first task',
+                  style: TextStyle(
+                      color: kNavyDark.withOpacity(0.25), fontSize: 13)),
+            ],
+          ),
         ),
       ),
     );

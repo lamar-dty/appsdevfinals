@@ -235,6 +235,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               },
             ),
+            // ── NAV BAR TOUCH BLOCKER ─────────────────────────
+            // The DraggableScrollableSheet extends behind the BottomAppBar.
+            // This invisible AbsorbPointer sits at the very bottom and
+            // swallows any touches in the nav bar zone so they never reach
+            // notification items underneath.
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 56,
+              child: AbsorbPointer(absorbing: true),
+            ),
           ],
         );
       },

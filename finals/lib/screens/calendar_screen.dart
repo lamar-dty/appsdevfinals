@@ -157,6 +157,18 @@ class _CalendarScreenState extends State<CalendarScreen> {
             );
           },
         ),
+
+        // ── NAV BAR TOUCH BLOCKER ────────────────────────────
+        // Prevents taps in the BottomAppBar zone from leaking
+        // through to the DraggableScrollableSheet behind it.
+        // Does NOT restrict sheet height or dragging behavior.
+        const Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: 56,
+          child: AbsorbPointer(absorbing: true),
+        ),
       ],
     );
   }

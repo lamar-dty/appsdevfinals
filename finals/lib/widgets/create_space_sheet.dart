@@ -220,7 +220,7 @@ class _CreateSpaceSheetState extends State<CreateSpaceSheet>
                 const SizedBox(height: 6),
                 TextField(
                   controller: ctrl,
-                  autofocus: true,
+                  autofocus: false,
                   maxLength: 9,
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[#0-9a-fA-F]')),
@@ -333,7 +333,7 @@ class _CreateSpaceSheetState extends State<CreateSpaceSheet>
                 const SizedBox(height: 6),
                 TextField(
                   controller: titleCtrl,
-                  autofocus: true,
+                  autofocus: false,
                   style: const TextStyle(color: kWhite, fontSize: 14),
                   decoration: InputDecoration(
                     hintText: 'e.g. Research references',

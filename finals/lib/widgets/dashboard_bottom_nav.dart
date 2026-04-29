@@ -63,10 +63,14 @@ class _NavItem extends StatelessWidget {
         return GestureDetector(
           onTap: () => onTap(index),
           behavior: HitTestBehavior.opaque,
-          child: AnimatedContainer(
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(end: selected ? -14.0 : 0.0),
             duration: const Duration(milliseconds: 250),
             curve: Curves.easeOutBack,
-            transform: Matrix4.translationValues(0, selected ? -14 : 0, 0),
+            builder: (context, dy, child) => Transform.translate(
+              offset: Offset(0, dy),
+              child: child,
+            ),
             child: Stack(
               clipBehavior: Clip.none,
               children: [
@@ -103,6 +107,7 @@ class _NavItem extends StatelessWidget {
     );
   }
 }
+
 
 // ─────────────────────────────────────────────────────────────
 // FAB

@@ -55,9 +55,6 @@ class _CreateEventSheetState extends State<_CreateEventSheet>
     _fadeCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 260));
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _fadeCtrl.forward();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      FocusScope.of(context).requestFocus(_titleFocus);
-    });
   }
 
   @override

@@ -70,7 +70,7 @@ void showAddMemberDialog(
 
               TextField(
                 controller: ctrl,
-                autofocus: true,
+                autofocus: false,
                 maxLength: 9, // # + 8 hex chars
                 inputFormatters: [
                   // Allow only # prefix + hex characters
@@ -199,7 +199,7 @@ void showAddMemberDialog(
                       final cleaned = raw.startsWith('#') ? raw.substring(1) : raw;
                       final validId = RegExp(r'^[0-9a-fA-F]{8}$').hasMatch(cleaned);
                       if (!validId) {
-                        setDlg(() => error = 'Enter a valid User ID (e.g. #a1b2c3d4)');
+                        setDlg(() => error = 'Enter a valid User ID');
                         return;
                       }
 
@@ -301,7 +301,7 @@ void showAddTaskDialog(
               const SizedBox(height: 6),
               TextField(
                 controller: titleCtrl,
-                autofocus: true,
+                autofocus: false,
                 style: const TextStyle(color: kWhite, fontSize: 14),
                 decoration: InputDecoration(
                   hintText: 'e.g. Research references',
@@ -588,7 +588,7 @@ void showConfirmKickMember(
 void showJoinSpaceDialog(
   BuildContext context, {
   required bool Function(String code) isAlreadyJoined,
-  required Future<void> Function(String code) onJoin,
+  required Future<String?> Function(String code) onJoin,
 }) {
   final ctrl = TextEditingController();
   String? error;
@@ -639,7 +639,7 @@ void showJoinSpaceDialog(
               const SizedBox(height: 6),
               TextField(
                 controller: ctrl,
-                autofocus: true,
+                autofocus: false,
                 textCapitalization: TextCapitalization.characters,
                 maxLength: 8,
                 style: const TextStyle(
@@ -699,7 +699,7 @@ void showJoinSpaceDialog(
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                     ),
-                    onPressed: () {
+                    onPressed: () async {
                       final code = ctrl.text.trim().toUpperCase();
                       if (code.isEmpty) {
                         setDlg(() => error = 'Enter an invite code');
@@ -713,9 +713,13 @@ void showJoinSpaceDialog(
                         setDlg(() => error = "You're already in this space");
                         return;
                       }
-// Close dialog and let the caller handle lookup & error display.
-Navigator.pop(ctx);
-onJoin(code);                    },
+                      final joinError = await onJoin(code);
+                      if (joinError != null) {
+                        setDlg(() => error = joinError);
+                        return;
+                      }
+                      Navigator.pop(ctx);
+                    },
                     child: const Text('Join',
                         style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
