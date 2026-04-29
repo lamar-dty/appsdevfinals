@@ -58,15 +58,21 @@ class SpacesScreenState extends State<SpacesScreen>
     // If the creator deleted a space while this user was away, remove it
     // from the local list immediately and fire the in-app notification so
     // the user sees it in their notification panel.
-    SpaceStore.instance.drainDeletionNotices().then((removedCodes) {
+    SpaceStore.instance.drainDeletionNotices().then((removedCodes) async {
+      if (removedCodes.isEmpty) return;
+      // ① Drain the shared inbox FIRST so the spaceDeleted notification is
+      //    already in _notifications before clearSpaceNotifications runs.
+      //    Reversing this order would wipe the notification before the user
+      //    ever sees it (clearSpaceNotifications preserves spaceDeleted now,
+      //    but draining first is still the safer, intention-revealing order).
+      await TaskStore.instance.drainSharedInbox();
       for (final code in removedCodes) {
-        // Clean up chat + task notifications for each removed space.
+        // ② Clean up operational notifications (task alerts, chat, deadlines)
+        //    for each removed space. spaceDeleted-type entries are preserved.
         SpaceChatStore.instance.deleteMessagesFor(code);
         TaskStore.instance.clearSpaceNotifications(code);
       }
-      // Drain the notification inbox so the "space deleted" alert appears.
-      TaskStore.instance.drainSharedInbox();
-      if (mounted && removedCodes.isNotEmpty) setState(() {});
+      if (mounted) setState(() {});
     });
 
     // ── Step 2: Pull latest patches for spaces that still exist.

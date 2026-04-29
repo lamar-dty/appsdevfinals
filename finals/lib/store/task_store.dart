@@ -533,9 +533,20 @@ class TaskStore extends ChangeNotifier {
     await _pushToOtherMembers(space, notif);
   }
 
+  /// Remove all operational notifications for [spaceInviteCode] — task alerts,
+  /// chat messages, member events, deadline warnings, etc.
+  ///
+  /// Lifecycle notifications ([NotificationType.spaceDeleted]) are intentionally
+  /// preserved: they must survive the space being removed from memory so the
+  /// user can see why the space disappeared.  Wiping them here would cause the
+  /// "space deleted" alert to vanish before the user ever reads it.
   void clearSpaceNotifications(String spaceInviteCode) {
-    if (_notifications.any((n) => n.spaceInviteCode == spaceInviteCode)) {
-      _notifications.removeWhere((n) => n.spaceInviteCode == spaceInviteCode);
+    const preserved = {NotificationType.spaceDeleted};
+    final before = _notifications.length;
+    _notifications.removeWhere((n) =>
+        n.spaceInviteCode == spaceInviteCode &&
+        !preserved.contains(n.type));
+    if (_notifications.length != before) {
       notifyListeners();
       _saveNotifications();
     }
@@ -543,11 +554,15 @@ class TaskStore extends ChangeNotifier {
 
   /// Remove all notifications whose source space no longer exists in
   /// [activeInviteCodes].  Call after the user leaves / a space is deleted.
+  ///
+  /// [NotificationType.spaceDeleted] is exempt: this is a lifecycle
+  /// notification that must remain visible even after the space is gone.
   void pruneOrphanedSpaceNotifications(Set<String> activeInviteCodes) {
     final before = _notifications.length;
     _notifications.removeWhere((n) =>
         n.spaceInviteCode != null &&
-        !activeInviteCodes.contains(n.spaceInviteCode));
+        !activeInviteCodes.contains(n.spaceInviteCode) &&
+        n.type != NotificationType.spaceDeleted);
     if (_notifications.length != before) {
       notifyListeners();
       _saveNotifications();

@@ -5,6 +5,7 @@ import '../models/app_notification.dart';
 import '../widgets/notification_item.dart';
 import '../store/space_store.dart';
 import '../store/auth_store.dart';
+import '../store/space_chat_store.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -24,8 +25,18 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _sheetController = DraggableScrollableController();
-    // Drain any cross-user notifications that arrived while the user was away.
+    // Drain the shared inbox so cross-user notifications (including
+    // spaceDeleted alerts) appear immediately on the home tab.
+    // Also drain deletion notices so the Spaces tab stays consistent even
+    // if Home is the first tab the user opens after a space is deleted.
     TaskStore.instance.drainSharedInbox();
+    SpaceStore.instance.drainDeletionNotices().then((removedCodes) {
+      for (final code in removedCodes) {
+        SpaceChatStore.instance.deleteMessagesFor(code);
+        TaskStore.instance.clearSpaceNotifications(code);
+      }
+      if (mounted && removedCodes.isNotEmpty) setState(() {});
+    });
   }
 
   @override

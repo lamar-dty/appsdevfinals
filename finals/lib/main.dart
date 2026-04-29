@@ -138,9 +138,19 @@ class _MainScaffoldState extends State<MainScaffold> {
           selectedIndex: _selectedIndex,
           onTap: (i) {
             setState(() => _selectedIndex = i);
-            // Drain cross-user notifications every time the home tab is opened
-            // so chat message notifications appear immediately.
-            if (i == 0) TaskStore.instance.drainSharedInbox();
+            // Drain inbox + deletion notices every time the home tab is
+            // opened so spaceDeleted alerts appear regardless of which tab
+            // the user visits first.
+            if (i == 0) {
+              TaskStore.instance.drainSharedInbox();
+              SpaceStore.instance.drainDeletionNotices().then((removed) {
+                for (final code in removed) {
+                  SpaceChatStore.instance.deleteMessagesFor(code);
+                  TaskStore.instance.clearSpaceNotifications(code);
+                }
+                if (removed.isNotEmpty) setState(() {});
+              });
+            }
           },
         ),
       ),
