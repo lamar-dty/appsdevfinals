@@ -444,12 +444,12 @@ class TaskStore extends ChangeNotifier {
     }
 
     // Push to every other member, guarding against null / self / already-pushed.
-    for (final member in space.members) {
-      if (member == leavingName) continue;
-      final uid = AuthStore.instance.userIdForName(member);
-      if (uid == null || uid == myId || pushed.contains(uid)) continue;
-      pushed.add(uid);
-      await _pushToUser(uid, notif);
+    for (final memberId in space.memberIds) {
+      final memberName = AuthStore.instance.nameForId(memberId) ?? memberId;
+      if (memberName == leavingName) continue;
+      if (memberId == myId || pushed.contains(memberId)) continue;
+      pushed.add(memberId);
+      await _pushToUser(memberId, notif);
     }
   }
 
@@ -523,39 +523,31 @@ class TaskStore extends ChangeNotifier {
     // Track pushed IDs to prevent double-delivery.
     final Set<String> pushed = {};
 
-    for (final member in space.members) {
+    for (final memberId in space.memberIds) {
+      final memberName = AuthStore.instance.nameForId(memberId) ?? memberId;
       // Skip the sender by display name and known sentinels.
-      if (member == senderName) continue;
-      if (member == myDisplayName && selfSentinels.contains(senderName)) {
+      if (memberName == senderName) continue;
+      if (memberName == myDisplayName && selfSentinels.contains(senderName)) {
         continue;
       }
-      final uid = AuthStore.instance.userIdForName(member);
-      if (uid == null || pushed.contains(uid)) continue;
-      pushed.add(uid);
-      if (uid == myId) {
+      if (pushed.contains(memberId)) continue;
+      pushed.add(memberId);
+      if (memberId == myId) {
         _addSpaceNotif(notif);
       } else {
-        await _pushToUser(uid, notif);
+        await _pushToUser(memberId, notif);
       }
     }
 
-    // Also deliver to creator if not already covered.
-    // Strip suffix before checking membership so "Alice (Creator)" vs "Alice"
-    // doesn't cause a missed-dedup.
+    // Also deliver to creator if not already covered by the memberIds loop.
     final cleanedCreator = space.creatorName
         .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
         .trim();
     final creatorId = cleanedCreator.isNotEmpty
         ? AuthStore.instance.userIdForName(cleanedCreator)
         : null;
-    final creatorAlreadyCovered = space.members.any((m) {
-      final cleaned =
-          m.replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '').trim();
-      return cleaned == cleanedCreator;
-    });
     if (creatorId != null &&
         creatorId != myId &&
-        !creatorAlreadyCovered &&
         !pushed.contains(creatorId)) {
       pushed.add(creatorId);
       await _pushToUser(creatorId, notif);
@@ -578,23 +570,35 @@ class TaskStore extends ChangeNotifier {
     await _pushToOtherMembers(space, notif);
   }
 
+  Future<void> notifySpaceTaskDeleted(Space space, SpaceTask task) async {
+    // Remove any existing notifications linked to this task.
+    _notifications.removeWhere((n) =>
+        n.spaceInviteCode == space.inviteCode && n.title == task.title);
+    final notif = AppNotification(
+      id: 'space_task_deleted_${space.inviteCode}_${task.title}',
+      type: NotificationType.spaceTaskAdded, // closest available type
+      sourceId: space.inviteCode,
+      spaceInviteCode: space.inviteCode,
+      spaceAccentColor: space.accentColor,
+      title: space.name,
+      subtitle: 'Task removed',
+      detail: '"${task.title}" was removed from "${space.name}".',
+    );
+    _addSpaceNotif(notif);
+    await _pushToOtherMembers(space, notif);
+  }
+
   /// Notify all assignees.  Handles sentinel display names ('You', 'You (Creator)')
   /// by resolving them to the current user's real display name before lookup.
   Future<void> notifySpaceTaskAssigned(
       Space space, SpaceTask task, String currentUserDisplayName) async {
-    final notif  = _buildSpaceTaskAssigned(space, task);
-    final myId   = AuthStore.instance.userId;
+    final notif = _buildSpaceTaskAssigned(space, task);
+    final myId  = AuthStore.instance.userId;
     final Set<String> pushed = {};
 
-    for (final assignee in task.assignedTo) {
-      // Normalise sentinels that come from the UI assignment picker.
-      final resolvedName = _resolveAssigneeName(assignee, currentUserDisplayName);
-      if (resolvedName == null) continue; // unknown / deleted user
-
-      final uid = AuthStore.instance.userIdForName(resolvedName);
-      if (uid == null || pushed.contains(uid)) continue;
+    for (final uid in task.assignedUserIds) {
+      if (uid.isEmpty || pushed.contains(uid)) continue;
       pushed.add(uid);
-
       if (uid == myId) {
         _addSpaceNotif(notif);
       } else {
@@ -621,8 +625,32 @@ class TaskStore extends ChangeNotifier {
             n.type == NotificationType.spaceTaskDueSoon ||
             n.type == NotificationType.spaceTaskCompleted));
     final notif = _buildSpaceTaskCompleted(space, task);
+    final myId = AuthStore.instance.userId;
+    final Set<String> pushed = {};
+
+    // Push to all members except the acting user.
+    for (final memberId in space.memberIds) {
+      if (memberId == myId || pushed.contains(memberId)) continue;
+      pushed.add(memberId);
+      await _pushToUser(memberId, notif);
+    }
+
+    // Also push to the creator if not the acting user and not already covered.
+    final cleanedCreator = space.creatorName
+        .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
+        .trim();
+    final creatorId = cleanedCreator.isNotEmpty
+        ? AuthStore.instance.userIdForName(cleanedCreator)
+        : null;
+    if (creatorId != null &&
+        creatorId != myId &&
+        !pushed.contains(creatorId)) {
+      pushed.add(creatorId);
+      await _pushToUser(creatorId, notif);
+    }
+
+    // Notify the acting user locally.
     _addSpaceNotif(notif);
-    await _pushToOtherMembers(space, notif);
   }
 
   /// Remove all operational notifications for [spaceInviteCode] — task alerts,
@@ -679,27 +707,14 @@ class TaskStore extends ChangeNotifier {
 
   // ── Internal helpers ──────────────────────────────────────
 
-  /// Resolve UI sentinel display names to the real displayName.
-  /// Returns null if the name cannot be resolved to any known user.
-  String? _resolveAssigneeName(String assignee, String currentUserDisplayName) {
-    if (assignee == 'You' || assignee == 'You (Creator)') {
-      return currentUserDisplayName;
-    }
-    // Strip the " (Creator)" suffix that the detail sheet appends.
-    final cleaned = assignee.endsWith(' (Creator)')
-        ? assignee.substring(0, assignee.length - ' (Creator)'.length)
-        : assignee;
-    return cleaned.isNotEmpty ? cleaned : null;
-  }
 
   Future<void> _pushToOtherMembers(Space space, AppNotification notif) async {
     final myId = AuthStore.instance.userId;
     final Set<String> pushed = {};
-    for (final member in space.members) {
-      final uid = AuthStore.instance.userIdForName(member);
-      if (uid == null || uid == myId || pushed.contains(uid)) continue;
-      pushed.add(uid);
-      await _pushToUser(uid, notif);
+    for (final memberId in space.memberIds) {
+      if (memberId == myId || pushed.contains(memberId)) continue;
+      pushed.add(memberId);
+      await _pushToUser(memberId, notif);
     }
   }
 

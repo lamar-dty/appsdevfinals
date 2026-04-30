@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../models/space.dart';
+import '../../store/auth_store.dart';
 import '../../store/space_chat_store.dart';
 import 'space_chat_sheet.dart';
 
@@ -33,7 +34,10 @@ class _SpaceChatFabState extends State<SpaceChatFab>
 
   String get _resolvedUser =>
       widget.currentUser ??
-      (widget.space.members.isNotEmpty ? widget.space.members.first : 'Me');
+      (widget.space.memberIds.isNotEmpty
+          ? (AuthStore.instance.nameForId(widget.space.memberIds.first) ??
+              widget.space.memberIds.first)
+          : 'Me');
 
   /// Only counts non-system messages from OTHER users that arrived after the
   /// current user's read cursor. Returns 0 once the sheet has been opened.

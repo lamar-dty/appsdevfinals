@@ -473,7 +473,7 @@ class _UsernameField extends StatelessWidget {
       enableSuggestions: false,
       style: const TextStyle(fontSize: 14, color: kNavyDark),
       decoration: InputDecoration(
-        hintText: 'e.g. jane_doe (lowercase letters)',
+        hintText: 'e.g. jane_doe',
         hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
         prefixText: '@',
         prefixStyle: const TextStyle(

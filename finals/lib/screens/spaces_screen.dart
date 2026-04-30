@@ -188,7 +188,7 @@ class SpacesScreenState extends State<SpacesScreen>
     });
   }
 
-  void openSpaceTaskByCode(String inviteCode, String taskTitle) {
+  void openSpaceTaskByCode(String inviteCode, String taskId) {
     final space = SpaceStore.instance.spaces
         .where((s) => s.inviteCode == inviteCode)
         .firstOrNull;
@@ -197,7 +197,7 @@ class SpacesScreenState extends State<SpacesScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final task = space.tasks
-          .where((t) => t.title == taskTitle)
+          .where((t) => t.id == taskId)
           .firstOrNull;
       if (task == null) return;
       _onTaskTapped(space, task);
@@ -234,6 +234,8 @@ class SpacesScreenState extends State<SpacesScreen>
       space.recalculate();
     });
     _saveSpaces();
+    SpaceStore.instance.writeSharedPatch(space);
+    TaskStore.instance.notifySpaceTaskDeleted(space, task);
   }
 
   void _reorderTask(Space space, int oldIndex, int newIndex) {
@@ -243,20 +245,17 @@ class SpacesScreenState extends State<SpacesScreen>
       space.tasks.insert(newIndex, task);
     });
     _saveSpaces();
+    SpaceStore.instance.writeSharedPatch(space);
   }
 
   void _addTaskToSpace(Space space, String title, String note) {
-    final task = SpaceTask(
-      title: title,
-      description: note,
-      status: 'Not Started',
-      statusColor: const Color(0xFFB0BAD3),
-    );
+    final task = SpaceTask.blank(title, description: note);
     setState(() {
       space.tasks.add(task);
       space.recalculate();
     });
     _saveSpaces();
+    SpaceStore.instance.writeSharedPatch(space);
     TaskStore.instance.notifySpaceTaskAdded(space, task);
     TaskStore.instance.refreshDeadlineAlertFor(space, task);
   }
@@ -264,35 +263,30 @@ class SpacesScreenState extends State<SpacesScreen>
   // ── Space mutations ────────────────────────────────────────
   Future<void> _removeSpace(Space space) async {
     if (!space.isCreator) {
+      final leavingId = AuthStore.instance.userId;
       final leavingName = AuthStore.instance.displayName;
       for (final task in space.tasks) {
-        task.assignedTo.remove(leavingName);
+        task.assignedUserIds.remove(leavingId);
       }
-      space.members.remove(leavingName);
-      await SpaceStore.instance.writeSharedPatchForLeave(space);
+      space.memberIds.remove(leavingId);
+      await SpaceStore.instance.writeSharedPatch(space);
       await TaskStore.instance.notifyMemberLeft(space, leavingName);
-    }
-    TaskStore.instance.clearSpaceNotifications(space.inviteCode);
-    SpaceChatStore.instance.deleteMessagesFor(space.inviteCode);
-
-    if (space.isCreator) {
-      for (final memberName in space.members) {
-        final cleaned = memberName
-            .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
-            .trim();
-        if (cleaned.isEmpty) continue;
-        final memberId = AuthStore.instance.userIdForName(cleaned);
-        if (memberId == null || memberId.isEmpty) continue;
+    } else {
+      await SpaceStore.instance.writeDeletionNotice(space);
+      for (final memberId in space.memberIds) {
+        if (memberId.isEmpty) continue;
         await TaskStore.instance.notifySpaceDeletedForMember(
-          spaceName:   space.name,
-          creatorName: space.creatorName,
-          accentColor: space.accentColor,
-          inviteCode:  space.inviteCode,
+          spaceName:    space.name,
+          creatorName:  space.creatorName,
+          accentColor:  space.accentColor,
+          inviteCode:   space.inviteCode,
           memberUserId: memberId,
         );
       }
     }
 
+    TaskStore.instance.clearSpaceNotifications(space.inviteCode);
+    SpaceChatStore.instance.deleteMessagesFor(space.inviteCode);
     await SpaceStore.instance.removeSpace(space);
     TaskStore.instance.pruneOrphanedSpaceNotifications(
       SpaceStore.instance.activeInviteCodes,
@@ -301,8 +295,6 @@ class SpacesScreenState extends State<SpacesScreen>
       if (_selectedSpace == space) _selectedSpace = null;
     });
 
-    // Reset scroll to top so the sheet's drag gesture isn't locked by a
-    // stale scroll offset left over from the deleted space's content.
     final sc = _sheetScrollController;
     if (sc != null && sc.hasClients) {
       try {
@@ -310,13 +302,9 @@ class SpacesScreenState extends State<SpacesScreen>
         if (pos.pixels > pos.minScrollExtent) {
           sc.jumpTo(pos.minScrollExtent);
         }
-      } catch (_) {
-        // Controller detached — safe to ignore.
-      }
+      } catch (_) {}
     }
 
-    // Re-seat the sheet at peek so DraggableScrollableSheet re-registers
-    // its drag correctly after the list content changes.
     if (_sheetController.isAttached) {
       _sheetController.animateTo(
         _snapPeek,
@@ -345,33 +333,39 @@ class SpacesScreenState extends State<SpacesScreen>
             space.recalculate();
           });
           _saveSpaces();
+          SpaceStore.instance.writeSharedPatch(space);
           if (task.status == 'Completed') {
             TaskStore.instance.notifySpaceTaskCompleted(space, task);
-          } else {
-            TaskStore.instance.notifySpaceTaskStatusChanged(space, task);
           }
           TaskStore.instance.refreshDeadlineAlertFor(space, task);
         },
         onAssign: (members) {
-          setState(() => task.assignedTo = members);
+          setState(() => task.assignedUserIds = members);
           _saveSpaces();
-          TaskStore.instance.notifySpaceTaskAssigned(space, task, currentUser);
+          SpaceStore.instance.writeSharedPatch(space);
+          if (members.isNotEmpty) {
+            TaskStore.instance.notifySpaceTaskAssigned(space, task, currentUser);
+          }
         },
         onUpdateNotes: (notes) {
           setState(() => task.description = notes);
           _saveSpaces();
+          SpaceStore.instance.writeSharedPatch(space);
         },
         onUpdateTitle: (title) {
           setState(() => task.title = title);
           _saveSpaces();
+          SpaceStore.instance.writeSharedPatch(space);
         },
         onAddAttachment: (name) {
           setState(() => task.attachments.add(SpaceAttachment(name: name)));
           _saveSpaces();
+          SpaceStore.instance.writeSharedPatch(space);
         },
         onRemoveAttachment: (a) {
           setState(() => task.attachments.remove(a));
           _saveSpaces();
+          SpaceStore.instance.writeSharedPatch(space);
         },
         onDelete: () {
           showConfirmDeleteTask(
@@ -426,28 +420,25 @@ class SpacesScreenState extends State<SpacesScreen>
       space,
       member,
       onConfirm: () {
+        final kickedName =
+            AuthStore.instance.nameForId(member) ?? '';
         setState(() {
-          final strippedMember =
-              member.replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '').trim();
-          space.members.removeWhere((m) {
-            final stripped = m.replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '').trim();
-            return stripped == strippedMember;
-          });
-          SpaceChatStore.instance.addSystemMessage(
-            space.inviteCode,
-            '$member was removed from the space.',
-          );
-          for (final task in space.tasks) {
-            task.assignedTo.removeWhere((a) {
-              final stripped = a.replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '').trim();
-              return stripped == strippedMember;
-            });
+          space.memberIds.remove(member);
+          if (kickedName.isNotEmpty) {
+            SpaceChatStore.instance.addSystemMessage(
+              space.inviteCode,
+              '$kickedName was removed from the space.',
+            );
+            for (final task in space.tasks) {
+              task.assignedUserIds.remove(member);
+            }
           }
           space.pruneStaleAssignees();
           space.recalculate();
         });
         _saveSpaces();
-        TaskStore.instance.notifyMemberRemoved(space, member);
+        SpaceStore.instance.writeSharedPatch(space);
+        TaskStore.instance.notifyMemberRemoved(space, kickedName);
       },
     );
   }
@@ -465,10 +456,11 @@ class SpacesScreenState extends State<SpacesScreen>
           description: found.description,
           dateRange: found.dateRange,
           dueDate: found.dueDate,
-          members: List<String>.from(found.members)
-            ..add(AuthStore.instance.displayName),
+          memberIds: List<String>.from(found.memberIds)
+            ..add(AuthStore.instance.userId),
           isCreator: false,
           creatorName: found.creatorName,
+          creatorId: found.creatorId,
           status: found.status,
           statusColor: found.statusColor,
           accentColor: found.accentColor,
@@ -481,7 +473,11 @@ class SpacesScreenState extends State<SpacesScreen>
         await SpaceStore.instance.addSpace(joined);
         await SpaceStore.instance.patchMembersInRegistry(
           joined.inviteCode,
-          joined.members,
+          joined.memberIds,
+        );
+        await SpaceStore.instance.patchMembersInSharedPatch(
+          joined.inviteCode,
+          joined.memberIds,
         );
         setState(() {});
         TaskStore.instance.notifySpaceJoined(joined);
@@ -519,18 +515,12 @@ class SpacesScreenState extends State<SpacesScreen>
 
   // ── Factory ────────────────────────────────────────────────
   Future<void> _pushInvitesToAddedMembers(Space space) async {
-    final creatorName = AuthStore.instance.displayName;
-    for (final memberName in space.members) {
-      final cleaned = memberName
-          .replaceAll(RegExp(r'\s*\(Creator\)\s*$'), '')
-          .trim();
-      if (cleaned == creatorName || cleaned == 'You' || cleaned.isEmpty) {
-        continue;
-      }
-      final recipientId = AuthStore.instance.userIdForName(cleaned);
-      if (recipientId == null || recipientId.isEmpty) continue;
+    final myId = AuthStore.instance.userId;
+    for (final recipientId in space.memberIds) {
+      if (recipientId.isEmpty || recipientId == myId) continue;
+      final memberName = AuthStore.instance.nameForId(recipientId) ?? '';
       await SpaceStore.instance.pushPendingInvite(recipientId, space);
-      await TaskStore.instance.notifyAddedToSpace(space, cleaned, recipientId);
+      await TaskStore.instance.notifyAddedToSpace(space, memberName, recipientId);
     }
   }
 
@@ -538,27 +528,32 @@ class SpacesScreenState extends State<SpacesScreen>
     String fmt(DateTime d) =>
         '${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}/${d.year.toString().substring(2)}';
 
+    // Convert member display names from SpaceResult to user IDs.
+    final memberIds = r.members
+        .map((name) => AuthStore.instance.userIdForName(name) ?? '')
+        .where((id) => id.isNotEmpty)
+        .toList();
+
     return Space(
       name: r.name,
       description:
           r.description.isEmpty ? 'No description.' : r.description,
       dateRange: '${fmt(r.startDate)} - ${fmt(r.endDate)}',
       dueDate: '${r.endDate.month}/${r.endDate.day}/${r.endDate.year}',
-      members: List<String>.from(r.members),
+      memberIds: memberIds,
       isCreator: true,
       creatorName: AuthStore.instance.displayName,
+      creatorId: AuthStore.instance.userId,
       status: 'Not Started',
       statusColor: const Color(0xFFB0BAD3),
       accentColor: r.accentColor,
       progress: 0.0,
       completedTasks: 0,
-      tasks: r.checklistTitles.asMap().entries.map((e) => SpaceTask(
-            title: e.value,
+      tasks: r.checklistTitles.asMap().entries.map((e) => SpaceTask.blank(
+            e.value,
             description: r.checklistNotes.length > e.key
                 ? r.checklistNotes[e.key]
                 : '',
-            status: 'Not Started',
-            statusColor: const Color(0xFFB0BAD3),
           )).toList(),
     );
   }

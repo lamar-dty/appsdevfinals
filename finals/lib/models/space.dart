@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:math';
+import '../store/auth_store.dart';
 
 // ─────────────────────────────────────────────────────────────
 // SpaceAttachment
@@ -60,30 +61,35 @@ class SpaceAttachment {
 // SpaceTask
 // ─────────────────────────────────────────────────────────────
 class SpaceTask {
+  final String id;
   String title;
   String description;
   String status;
   Color statusColor;
 
-  /// Real display names of assigned members as stored in AuthStore.
-  /// Must never contain sentinel strings ('You', 'You (Creator)', 'Creator',
-  /// or any name suffixed with ' (Creator)').
-  /// The UI layer is responsible for translating the stored name to a
-  /// display label before presenting it (e.g. "You" for the current user),
-  /// but the model always stores and operates on the canonical display name.
-  List<String> assignedTo;
+  /// User IDs of assigned members.
+  /// Use [assignedNames] to obtain display names for the UI.
+  List<String> assignedUserIds;
 
   final List<SpaceAttachment> attachments;
 
   SpaceTask({
+    required this.id,
     required this.title,
     required this.description,
     required this.status,
     required this.statusColor,
-    List<String>? assignedTo,
+    List<String>? assignedUserIds,
     List<SpaceAttachment>? attachments,
-  })  : assignedTo  = _sanitiseAssignees(assignedTo ?? <String>[]),
-        attachments = attachments ?? <SpaceAttachment>[];
+  })  : assignedUserIds = _dedupeIds(assignedUserIds ?? <String>[]),
+        attachments     = attachments ?? <SpaceAttachment>[];
+
+  /// Resolved display names for all assigned user IDs.
+  /// IDs that cannot be resolved are silently skipped.
+  List<String> get assignedNames => assignedUserIds
+      .map((id) => AuthStore.instance.nameForId(id) ?? '')
+      .where((n) => n.isNotEmpty)
+      .toList();
 
   static const List<String> _order = [
     'Not Started',
@@ -99,8 +105,22 @@ class SpaceTask {
     }
   }
 
+  static String _generateId() {
+    final rng = Random.secure();
+    final bytes = List<int>.generate(16, (_) => rng.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    String hex(int b) => b.toRadixString(16).padLeft(2, '0');
+    return '${hex(bytes[0])}${hex(bytes[1])}${hex(bytes[2])}${hex(bytes[3])}'
+        '-${hex(bytes[4])}${hex(bytes[5])}'
+        '-${hex(bytes[6])}${hex(bytes[7])}'
+        '-${hex(bytes[8])}${hex(bytes[9])}'
+        '-${hex(bytes[10])}${hex(bytes[11])}${hex(bytes[12])}${hex(bytes[13])}${hex(bytes[14])}${hex(bytes[15])}';
+  }
+
   factory SpaceTask.blank(String title, {String description = ''}) =>
       SpaceTask(
+        id:          _generateId(),
         title:       title,
         description: description,
         status:      'Not Started',
@@ -113,55 +133,61 @@ class SpaceTask {
     statusColor = colorFor(status);
   }
 
-  // ── Assignee helpers ───────────────────────────────────────
+  /// Deduplicates a list of user IDs, dropping empty strings.
+  static List<String> _dedupeIds(List<String> raw) {
+    final seen = <String>{};
+    return raw.where((id) => id.isNotEmpty && seen.add(id)).toList();
+  }
 
-  /// Strips sentinel strings and " (Creator)" suffixes from a list of
-  /// assignee names so that only canonical display names are stored.
-  ///
-  /// Sentinel strings like 'You', 'You (Creator)', and 'Creator' must never
-  /// be persisted to storage.  The picker UI may generate these labels for
-  /// display purposes, but the model layer must always sanitise before storing.
-  static List<String> _sanitiseAssignees(List<String> raw) {
+  /// Converts a list of legacy display names to user IDs for migration.
+  static List<String> _taskNamesToIds(List<dynamic>? rawNames) {
     const drop = <String>{'You', 'You (Creator)', 'Creator'};
     final result = <String>[];
-    for (final name in raw) {
+    for (final item in rawNames?.whereType<String>() ?? <String>[]) {
+      if (item.isEmpty || drop.contains(item)) continue;
+      final name = item.endsWith(' (Creator)')
+          ? item.substring(0, item.length - ' (Creator)'.length).trim()
+          : item;
       if (name.isEmpty) continue;
-      if (drop.contains(name)) continue;
-      if (name.endsWith(' (Creator)')) {
-        final cleaned = name
-            .substring(0, name.length - ' (Creator)'.length)
-            .trim();
-        if (cleaned.isNotEmpty) result.add(cleaned);
-        continue;
-      }
-      result.add(name);
+      final uid = AuthStore.instance.userIdForName(name);
+      if (uid != null && uid.isNotEmpty) result.add(uid);
     }
-    // Deduplicate while preserving order.
     final seen = <String>{};
     return result.where(seen.add).toList();
   }
 
-  // ── Serialisation ──────────────────────────────────────────
-
   Map<String, dynamic> toJson() => {
-        'title':       title,
-        'description': description,
-        'status':      status,
-        'assignedTo':  assignedTo,
-        'attachments': attachments.map((a) => a.toJson()).toList(),
+        'id':              id,
+        'title':           title,
+        'description':     description,
+        'status':          status,
+        'assignedUserIds': assignedUserIds,
+        'attachments':     attachments.map((a) => a.toJson()).toList(),
       };
 
   factory SpaceTask.fromJson(Map<String, dynamic> j) {
     final status = (j['status'] as String?) ?? 'Not Started';
-    return SpaceTask(
-      title:       (j['title']       as String?) ?? '',
-      description: (j['description'] as String?) ?? '',
-      status:      status,
-      statusColor: colorFor(status),
-      // Sanitise on load so legacy records with sentinel names are healed.
-      assignedTo: _sanitiseAssignees(
+    final id = (j['id'] as String?)?.isNotEmpty == true
+        ? j['id'] as String
+        : _generateId();
+
+    // ── Migration: prefer assignedUserIds; fall back to converting legacy names ──
+    final List<String> resolvedIds;
+    if (j.containsKey('assignedUserIds') && j['assignedUserIds'] is List) {
+      resolvedIds = _dedupeIds(
           List<String>.from(
-              (j['assignedTo'] as List?)?.whereType<String>().toList() ?? [])),
+              (j['assignedUserIds'] as List).whereType<String>()));
+    } else {
+      resolvedIds = _taskNamesToIds(j['assignedTo'] as List?);
+    }
+
+    return SpaceTask(
+      id:              id,
+      title:           (j['title']       as String?) ?? '',
+      description:     (j['description'] as String?) ?? '',
+      status:          status,
+      statusColor:     colorFor(status),
+      assignedUserIds: resolvedIds,
       attachments: ((j['attachments'] as List?) ?? [])
           .whereType<Map>()
           .map((e) => SpaceAttachment.fromJson(Map<String, dynamic>.from(e)))
@@ -179,9 +205,9 @@ class Space {
   final String dateRange;
   final String dueDate;
 
-  /// All members except the creator.
-  /// Must contain only canonical display names — never sentinel strings.
-  final List<String> members;
+  /// User IDs of all members except the creator.
+  /// Use [memberNames] to obtain display names for the UI.
+  final List<String> memberIds;
 
   /// True when the current user created this space.
   final bool isCreator;
@@ -189,6 +215,10 @@ class Space {
   /// Canonical display name of whoever created the space.
   /// Must never be a sentinel string.
   final String creatorName;
+
+  /// User ID of the creator. Empty for legacy spaces loaded before this
+  /// field was introduced — use [creatorName] as fallback in that case.
+  final String creatorId;
 
   String status;
   Color statusColor;
@@ -203,9 +233,10 @@ class Space {
     required this.description,
     required this.dateRange,
     required this.dueDate,
-    required this.members,
+    required this.memberIds,
     required this.isCreator,
     required this.creatorName,
+    this.creatorId = '',
     required this.status,
     required this.statusColor,
     required this.accentColor,
@@ -225,6 +256,18 @@ class Space {
         ),
         inviteCode = inviteCode ?? _generateCode();
 
+  // ── Member name resolution ─────────────────────────────────
+
+  /// Resolved display names for all non-creator members.
+  /// IDs that cannot be resolved are silently skipped.
+  List<String> get memberNames => memberIds
+      .map((id) => AuthStore.instance.nameForId(id) ?? '')
+      .where((n) => n.isNotEmpty)
+      .toList();
+
+  /// Total headcount including the creator.
+  int get memberCount => memberIds.length + 1;
+
   // ── Sentinel guard ─────────────────────────────────────────
   static bool _isSentinel(String name) {
     const sentinels = <String>{'You', 'You (Creator)', 'Creator'};
@@ -239,38 +282,33 @@ class Space {
     return List.generate(8, (_) => chars[rng.nextInt(chars.length)]).join();
   }
 
-  /// Total headcount including the creator.
-  int get memberCount => members.length + 1;
-
   int get totalTasks => tasks.length;
 
   bool get isCompleted => status == 'Completed';
 
   // ── Member helpers ─────────────────────────────────────────
 
-  /// Returns the canonical (stored) display name for the current user
-  /// within this space context.
-  ///
-  /// If [currentUserDisplayName] matches the creator name, returns
-  /// [creatorName]; otherwise returns the name as-is.
-  /// Never returns a sentinel string.
   String canonicalNameFor(String currentUserDisplayName) {
     if (currentUserDisplayName.isEmpty) return creatorName;
-    // Strip any " (Creator)" suffix the picker may have appended.
-    final cleaned = _stripCreatorSuffix(currentUserDisplayName);
-    return cleaned;
+    return _stripCreatorSuffix(currentUserDisplayName);
   }
 
-  /// True if [displayName] is the creator OR appears in the members list.
-  /// Sentinel strings are resolved correctly without storing them.
+  /// True if [userId] is the creator or a member (ID-based).
+  bool containsMemberId(String userId) {
+    if (userId.isEmpty) return false;
+    if (creatorId.isNotEmpty && userId == creatorId) return true;
+    return memberIds.contains(userId);
+  }
+
+  /// True if [displayName] resolves to the creator or a member.
+  /// Kept for call sites that still work with display names.
   bool containsMember(String displayName) {
     if (displayName.isEmpty) return false;
     final cleaned = _stripCreatorSuffix(displayName);
     if (cleaned == creatorName) return true;
-    return members.contains(cleaned);
+    return memberNames.contains(cleaned);
   }
 
-  /// Strips the " (Creator)" suffix that the picker UI may append.
   static String _stripCreatorSuffix(String name) {
     if (name.endsWith(' (Creator)')) {
       return name.substring(0, name.length - ' (Creator)'.length).trim();
@@ -278,20 +316,20 @@ class Space {
     return name;
   }
 
-  /// Removes assignee names from all tasks that are no longer members of
-  /// this space.  Call after removing a member or syncing from shared patches.
-  ///
-  /// Sentinel strings are also pruned — they must never persist in storage.
+  /// Removes assignee IDs from all tasks whose users are no longer members.
   void pruneStaleAssignees() {
-    final valid = <String>{creatorName, ...members};
+    final validIds = <String>{
+      if (creatorId.isNotEmpty) creatorId,
+      ...memberIds,
+    };
+    // Fallback: if creatorId is empty, resolve by name.
+    if (creatorId.isEmpty && creatorName.isNotEmpty) {
+      final cid = AuthStore.instance.userIdForName(creatorName);
+      if (cid != null) validIds.add(cid);
+    }
     for (final task in tasks) {
-      task.assignedTo.removeWhere((name) {
-        if (name.isEmpty) return true;
-        // Always remove sentinel strings, regardless of membership.
-        if (_isSentinel(name)) return true;
-        final cleaned = _stripCreatorSuffix(name);
-        return !valid.contains(cleaned);
-      });
+      task.assignedUserIds
+          .removeWhere((id) => id.isEmpty || !validIds.contains(id));
     }
   }
 
@@ -313,7 +351,6 @@ class Space {
     }
   }
 
-  /// Days remaining until [dueDate] (negative = overdue).
   int get daysLeft {
     try {
       final parts = dueDate.split('/');
@@ -325,7 +362,7 @@ class Space {
       );
       return due.difference(DateTime.now()).inDays;
     } catch (_) {
-      return 0; // malformed date — treat as today
+      return 0;
     }
   }
 
@@ -336,9 +373,10 @@ class Space {
         'description':    description,
         'dateRange':      dateRange,
         'dueDate':        dueDate,
-        'members':        members,
+        'memberIds':      memberIds,
         'isCreator':      isCreator,
         'creatorName':    creatorName,
+        'creatorId':      creatorId,
         'status':         status,
         'accentColor':    accentColor.value,
         'progress':       progress,
@@ -347,14 +385,11 @@ class Space {
         'inviteCode':     inviteCode,
       };
 
-  /// Ensures exactly one space on each side of the dash in a date-range string.
   static String _normaliseDateRange(String raw) {
     if (raw.isEmpty) return raw;
     return raw.replaceAll(RegExp(r'\s*-\s*'), ' - ');
   }
 
-  /// Sanitises a stored creator name: strips " (Creator)" suffix and falls
-  /// back to an empty string on failure rather than storing a sentinel.
   static String _sanitiseCreatorName(String? raw) {
     if (raw == null || raw.isEmpty) return '';
     if (raw == 'Creator' || raw == 'You' || raw == 'You (Creator)') return '';
@@ -364,24 +399,29 @@ class Space {
     return raw;
   }
 
-  /// Sanitises the members list: strips sentinel strings and " (Creator)"
-  /// suffixes so that only canonical display names are stored.
-  static List<String> _sanitiseMembers(List<dynamic>? raw) {
+  /// Converts a legacy display-name list to user IDs.
+  /// Names that cannot be resolved are dropped.
+  static List<String> _namesToIds(List<dynamic>? rawNames) {
     const drop = <String>{'You', 'You (Creator)', 'Creator'};
     final result = <String>[];
-    for (final item in raw?.whereType<String>() ?? <String>[]) {
-      if (item.isEmpty) continue;
-      if (drop.contains(item)) continue;
-      if (item.endsWith(' (Creator)')) {
-        final cleaned = item
-            .substring(0, item.length - ' (Creator)'.length)
-            .trim();
-        if (cleaned.isNotEmpty) result.add(cleaned);
-        continue;
-      }
-      result.add(item);
+    for (final item in rawNames?.whereType<String>() ?? <String>[]) {
+      if (item.isEmpty || drop.contains(item)) continue;
+      final name = item.endsWith(' (Creator)')
+          ? item.substring(0, item.length - ' (Creator)'.length).trim()
+          : item;
+      if (name.isEmpty) continue;
+      final uid = AuthStore.instance.userIdForName(name);
+      if (uid != null && uid.isNotEmpty) result.add(uid);
     }
-    // Deduplicate.
+    final seen = <String>{};
+    return result.where(seen.add).toList();
+  }
+
+  static List<String> _sanitiseMemberIds(List<dynamic>? raw) {
+    final result = <String>[];
+    for (final item in raw?.whereType<String>() ?? <String>[]) {
+      if (item.isNotEmpty) result.add(item);
+    }
     final seen = <String>{};
     return result.where(seen.add).toList();
   }
@@ -389,24 +429,37 @@ class Space {
   factory Space.fromJson(Map<String, dynamic> j) {
     final status      = (j['status'] as String?) ?? 'Not Started';
     final creatorName = _sanitiseCreatorName(j['creatorName'] as String?);
+    final creatorId   = (j['creatorId'] as String?) ?? '';
 
-    // Heal legacy records: remove any member entry that duplicates the
-    // creator name (including sentinel variants) to avoid double-counting.
-    final rawMembers  = _sanitiseMembers(j['members'] as List?);
-    final members     = creatorName.isEmpty
-        ? rawMembers
-        : rawMembers.where((m) => m != creatorName).toList();
+    // ── Migration: prefer memberIds; fall back to converting legacy names ──
+    final List<String> rawMemberIds;
+    if (j.containsKey('memberIds') && j['memberIds'] is List) {
+      rawMemberIds = _sanitiseMemberIds(j['memberIds'] as List?);
+    } else {
+      rawMemberIds = _namesToIds(j['members'] as List?);
+    }
+
+    // Resolve creator ID (may have been stored, or derive from name).
+    final resolvedCreatorId = creatorId.isNotEmpty
+        ? creatorId
+        : (creatorName.isNotEmpty
+            ? (AuthStore.instance.userIdForName(creatorName) ?? '')
+            : '');
+
+    // Remove creator's own ID from memberIds to avoid double-counting.
+    final filteredMemberIds = resolvedCreatorId.isNotEmpty
+        ? rawMemberIds.where((id) => id != resolvedCreatorId).toList()
+        : rawMemberIds;
 
     return Space(
       name:           (j['name']        as String?) ?? '',
       description:    (j['description'] as String?) ?? '',
       dateRange:      _normaliseDateRange((j['dateRange'] as String?) ?? ''),
       dueDate:        (j['dueDate']     as String?) ?? '',
-      members:        members,
+      memberIds:      filteredMemberIds,
       isCreator:      (j['isCreator']   as bool?)   ?? false,
-      // Fall back to a non-empty placeholder only in release builds; in debug
-      // the Space constructor assert will fire to surface the root cause.
       creatorName:    creatorName.isNotEmpty ? creatorName : 'Unknown',
+      creatorId:      resolvedCreatorId,
       status:         status,
       statusColor:    SpaceTask.colorFor(status),
       accentColor:    Color((j['accentColor'] as int?) ?? 0xFF9B88E8),

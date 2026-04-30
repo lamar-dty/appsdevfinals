@@ -203,48 +203,59 @@ void showAddMemberDialog(
                         return;
                       }
 
-                      // Resolve the typed ID to a real display name.
+                      // Resolve the typed tag to a real display name and full UUID.
                       final resolvedName = AuthStore.instance.nameForId(cleaned);
                       if (resolvedName == null) {
                         setDlg(() => error = 'No user found with that ID');
                         return;
                       }
+                      final invitedId = AuthStore.instance.userIdForName(resolvedName);
+                      if (invitedId == null) {
+                        setDlg(() => error = 'No user found with that ID');
+                        return;
+                      }
 
                       // Don't add yourself or someone already in the space.
-                      if (resolvedName == AuthStore.instance.displayName) {
+                      if (invitedId == AuthStore.instance.userId) {
                         setDlg(() => error = "That's you!");
                         return;
                       }
-                      if (space.members.contains(resolvedName)) {
+                      if (space.memberIds.contains(invitedId)) {
                         setDlg(() => error = 'Already a member');
                         return;
                       }
 
                       Navigator.pop(ctx);
 
-                      // Add the resolved display name to the member list.
-                      space.members.add(resolvedName);
+                      // Add the full UUID (not the 8-char tag) to memberIds.
+                      space.memberIds.add(invitedId);
+
+                      // Persist locally, sync to shared patches, and update the
+                      // global registry so the new member list is immediately
+                      // visible to all users.
                       SpaceStore.instance.save();
+                      await SpaceStore.instance.writeSharedPatch(space);
+                      await SpaceStore.instance.patchMembersInRegistry(
+                        space.inviteCode,
+                        space.memberIds,
+                      );
 
-                      final invitedId = AuthStore.instance.userIdForName(resolvedName);
-                      if (invitedId != null) {
-                        // Push the space itself into the invitee's pending inbox
-                        // so it appears automatically when they open the app.
-                        await SpaceStore.instance.pushPendingInvite(invitedId, space);
+                      // Push the invite AFTER the registry is updated so user B
+                      // drains the latest member list (which includes themselves).
+                      await SpaceStore.instance.pushPendingInvite(invitedId, space);
 
-                        // Also push a notification so they know they were added.
-                        final notif = AppNotification(
-                          id: 'space_invite_${space.inviteCode}_$resolvedName',
-                          type: NotificationType.spaceMemberJoined,
-                          sourceId: space.inviteCode,
-                          spaceInviteCode: space.inviteCode,
-                          spaceAccentColor: space.accentColor,
-                          title: space.name,
-                          subtitle: 'You were added to a space 🎉',
-                          detail: '${AuthStore.instance.displayName} added you to "${space.name}".',
-                        );
-                        await TaskStore.instance.pushInviteNotification(invitedId, notif);
-                      }
+                      // Notify user B that they were added.
+                      final notif = AppNotification(
+                        id: 'space_invite_${space.inviteCode}_$invitedId',
+                        type: NotificationType.spaceMemberJoined,
+                        sourceId: space.inviteCode,
+                        spaceInviteCode: space.inviteCode,
+                        spaceAccentColor: space.accentColor,
+                        title: space.name,
+                        subtitle: 'You were added to a space 🎉',
+                        detail: '${AuthStore.instance.displayName} added you to "${space.name}".',
+                      );
+                      await TaskStore.instance.pushInviteNotification(invitedId, notif);
 
                       onMemberAdded();
                     },

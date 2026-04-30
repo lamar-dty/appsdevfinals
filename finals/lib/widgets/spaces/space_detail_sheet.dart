@@ -73,6 +73,8 @@ class _SelectedBackgroundState extends State<SelectedBackground> {
       space.name = trimmed;
       _isEditingName = false;
     });
+    SpaceStore.instance.save();
+    SpaceStore.instance.writeSharedPatch(space);
   }
 
   void _saveDesc() {
@@ -82,6 +84,7 @@ class _SelectedBackgroundState extends State<SelectedBackground> {
       _isEditingDesc = false;
     });
     SpaceStore.instance.save();
+    SpaceStore.instance.writeSharedPatch(space);
   }
 
   @override
@@ -553,14 +556,16 @@ class _SelectedBackgroundState extends State<SelectedBackground> {
       canKick: false,
       onKick: null,
     ),
-    ...space.members.map(
-      (m) => MemberChip(
-        name: m,
+    ...space.memberIds.map((id) {
+      final displayName =
+          AuthStore.instance.nameForId(id) ?? '';
+      if (displayName.isEmpty) return const SizedBox.shrink();
+      return MemberChip(
+        name: displayName,
         canKick: space.isCreator,
-        onKick:
-            space.isCreator ? () => widget.onKickMember(m) : null,
-      ),
-    ),
+        onKick: space.isCreator ? () => widget.onKickMember(id) : null,
+      );
+    }),
   ],
 ),
 
@@ -644,7 +649,7 @@ class _SelectedBackgroundState extends State<SelectedBackground> {
               children: List.generate(
                 space.tasks.length,
                 (i) => KeyedSubtree(
-                  key: ValueKey(space.tasks[i].title + i.toString()),
+                  key: ValueKey(space.tasks[i].id),
                   child: SelectedTaskItem(
                     task: space.tasks[i],
                     index: i,
@@ -684,7 +689,7 @@ class SelectedTaskItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasAssignee = task.assignedTo.isNotEmpty;
+    final hasAssignee = task.assignedUserIds.isNotEmpty;
     final hasAttachments = task.attachments.isNotEmpty;
 
     return GestureDetector(
@@ -803,11 +808,11 @@ class SelectedTaskItem extends StatelessWidget {
                         children: [
                           if (hasAssignee) ...[
                             Builder(builder: (_) {
-                              final total = task.assignedTo.length;
+                              final names     = task.assignedNames;
+                              final total     = task.assignedUserIds.length;
                               final showCount = total > 3 ? 3 : total;
-                              final overflow = total - showCount;
-                              final slots =
-                                  showCount + (overflow > 0 ? 1 : 0);
+                              final overflow  = total - showCount;
+                              final slots     = showCount + (overflow > 0 ? 1 : 0);
                               return SizedBox(
                                 width: 16 + (slots - 1) * 10.0,
                                 height: 16,
@@ -842,7 +847,7 @@ class SelectedTaskItem extends StatelessWidget {
                                             const Color(0xFF2A3D60),
                                           ][i % 3],
                                           child: Text(
-                                            task.assignedTo[i][0]
+                                            (i < names.length ? names[i] : '?')[0]
                                                 .toUpperCase(),
                                             style: const TextStyle(
                                                 color: kWhite,
@@ -1074,27 +1079,18 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
   ///
   /// Computed lazily from [widget.space] and [widget.currentUser]:
   ///  - creator        → space.isCreator flag (set at join/create time)
-  ///  - assignedMember → current user appears in task.assignedTo
-  ///                     (raw name or with "(Creator)" suffix)
+  ///  - assignedMember → current user's ID appears in task.assignedUserIds
+  ///                     (checked via AuthStore.instance.userId)
   ///  - viewer         → everyone else
   ///
-  /// Uses a getter (not cached field) so it reacts to task.assignedTo
+  /// Uses a getter (not cached field) so it reacts to task.assignedUserIds
   /// mutations that happen while the sheet is open.
   TaskPermission get _permission {
     if (widget.space.isCreator) return TaskPermission.creator;
-    final me = widget.currentUser; // raw displayName — never a sentinel
-    final assigned = widget.task.assignedTo;
-
-    // Only match the current user's real display name, or the name with the
-    // "(Creator)" suffix the assignment picker appends for the creator slot.
-    // We deliberately do NOT match bare 'You' / 'You (Creator)' sentinels
-    // here — those are creator-side UI labels that may have been persisted
-    // in assignedTo by an older build.  Matching them would grant
-    // assignedMember rights to every non-creator user on any task where the
-    // creator assigned themselves, which is a security / UX bug.
-    final isAssigned = assigned.contains(me) ||
-        assigned.contains('$me (Creator)');
-    if (isAssigned) return TaskPermission.assignedMember;
+    final myId = AuthStore.instance.userId;
+    if (myId.isNotEmpty && widget.task.assignedUserIds.contains(myId)) {
+      return TaskPermission.assignedMember;
+    }
     return TaskPermission.viewer;
   }
 
@@ -1107,6 +1103,10 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
       _permission == TaskPermission.assignedMember;
 
   bool get _canEditStructure => _permission == TaskPermission.creator;
+
+  bool get _canEditNotes =>
+      _permission == TaskPermission.creator ||
+      _permission == TaskPermission.assignedMember;
 
   @override
   void initState() {
@@ -1366,7 +1366,7 @@ class _TaskDetailSheetState extends State<TaskDetailSheet> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const _SectionLabel(label: 'Notes'),
-if (!_isEditingNotes && _canEditStructure)                          GestureDetector(
+if (!_isEditingNotes && _canEditNotes)                          GestureDetector(
                             onTap: () => setState(() => _isEditingNotes = true),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
@@ -1394,7 +1394,7 @@ if (!_isEditingNotes && _canEditStructure)                          GestureDetec
                               ),
                             ),
                           )
-else if (_canEditStructure)                          Row(
+else if (_canEditNotes)                          Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               GestureDetector(
@@ -1513,19 +1513,19 @@ else if (_canEditStructure)                          Row(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 5),
                             decoration: BoxDecoration(
-                              color: task.assignedTo.isEmpty
+                              color: task.assignedUserIds.isEmpty
                                   ? kWhite.withOpacity(0.18)
                                   : kWhite.withOpacity(0.06),
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(
-                                  color: task.assignedTo.isEmpty
+                                  color: task.assignedUserIds.isEmpty
                                       ? kWhite.withOpacity(0.4)
                                       : kWhite.withOpacity(0.12)),
                             ),
                             child: Text(
                               'Unassigned',
                               style: TextStyle(
-                                color: task.assignedTo.isEmpty
+                                color: task.assignedUserIds.isEmpty
                                     ? kWhite
                                     : kWhite.withOpacity(0.4),
                                 fontSize: 11,
@@ -1533,66 +1533,88 @@ else if (_canEditStructure)                          Row(
                             ),
                           ),
                         ),
-                        // Member chips
-...[widget.space.isCreator ? 'You (Creator)' : '${widget.space.creatorName} (Creator)', ...widget.space.members]                            .map((m) {
-                          final isSelected = task.assignedTo.contains(m);
-                          return GestureDetector(
-                            onTap: _canEditStructure
-    ? () {
-        final updated =
-            List<String>.from(task.assignedTo);
-
-        isSelected
-            ? updated.remove(m)
-            : updated.add(m);
-
-        widget.onAssign(updated);
-        setState(() {});
-      }
-    : null,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? widget.space.accentColor.withOpacity(0.2)
-                                    : kWhite.withOpacity(0.06),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                    color: isSelected
-                                        ? widget.space.accentColor
-                                            .withOpacity(0.5)
-                                        : kWhite.withOpacity(0.12)),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  CircleAvatar(
-                                    radius: 8,
-                                    backgroundColor: isSelected
-                                        ? widget.space.accentColor
-                                            .withOpacity(0.5)
-                                        : const Color(0xFF4A6FA5),
-                                    child: Text(
-                                      m[0].toUpperCase(),
-                                      style: const TextStyle(
-                                          color: kWhite,
-                                          fontSize: 7,
-                                          fontWeight: FontWeight.bold),
+                        // Member chips — build (displayName, userId) pairs so
+                        // selection and onAssign always operate on IDs while
+                        // the UI shows real names.
+                        ...() {
+                          // Creator entry
+                          final creatorLabel = widget.space.isCreator
+                              ? 'You (Creator)'
+                              : '${widget.space.creatorName} (Creator)';
+                          final creatorId = widget.space.creatorId.isNotEmpty
+                              ? widget.space.creatorId
+                              : AuthStore.instance
+                                      .userIdForName(widget.space.creatorName) ??
+                                  '';
+                          // Member entries: (label, id) pairs
+                          final entries = <({String label, String uid})>[
+                            if (creatorId.isNotEmpty)
+                              (label: creatorLabel, uid: creatorId),
+                            ...widget.space.memberIds.map((id) {
+                              final name =
+                                  AuthStore.instance.nameForId(id) ?? '';
+                              return (label: name, uid: id);
+                            }).where((e) => e.label.isNotEmpty),
+                          ];
+                          return entries.map((entry) {
+                            final isSelected =
+                                task.assignedUserIds.contains(entry.uid);
+                            return GestureDetector(
+                              onTap: _canEditStructure
+                                  ? () {
+                                      final updated = List<String>.from(
+                                          task.assignedUserIds);
+                                      isSelected
+                                          ? updated.remove(entry.uid)
+                                          : updated.add(entry.uid);
+                                      widget.onAssign(updated);
+                                      setState(() {});
+                                    }
+                                  : null,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? widget.space.accentColor.withOpacity(0.2)
+                                      : kWhite.withOpacity(0.06),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                      color: isSelected
+                                          ? widget.space.accentColor
+                                              .withOpacity(0.5)
+                                          : kWhite.withOpacity(0.12)),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 8,
+                                      backgroundColor: isSelected
+                                          ? widget.space.accentColor
+                                              .withOpacity(0.5)
+                                          : const Color(0xFF4A6FA5),
+                                      child: Text(
+                                        entry.label[0].toUpperCase(),
+                                        style: const TextStyle(
+                                            color: kWhite,
+                                            fontSize: 7,
+                                            fontWeight: FontWeight.bold),
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(m,
-                                      style: TextStyle(
-                                          color: isSelected
-                                              ? kWhite
-                                              : kWhite.withOpacity(0.55),
-                                          fontSize: 11)),
-                                ],
+                                    const SizedBox(width: 6),
+                                    Text(entry.label,
+                                        style: TextStyle(
+                                            color: isSelected
+                                                ? kWhite
+                                                : kWhite.withOpacity(0.55),
+                                            fontSize: 11)),
+                                  ],
+                                ),
                               ),
-                            ),
-                          );
-                        }),
+                            );
+                          });
+                        }(),
                       ],
                     ),
 
